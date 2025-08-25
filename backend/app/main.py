@@ -116,6 +116,10 @@ _allowed_origins = (
     [o.strip() for o in _env_origins.split(",") if o.strip()] if _env_origins else _default_allowed_origins
 )
 
+# Log the configured origins for debugging
+print(f"CORS: Configured origins: {_allowed_origins}")
+print(f"CORS: Environment variable ALLOWED_ORIGINS: {_env_origins}")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
