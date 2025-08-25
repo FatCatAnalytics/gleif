@@ -112,18 +112,27 @@ _default_allowed_origins = [
     "http://127.0.0.1:5173",
 ]
 _env_origins = os.getenv("ALLOWED_ORIGINS")
-_allowed_origins = (
-    [o.strip() for o in _env_origins.split(",") if o.strip()] if _env_origins else _default_allowed_origins
-)
 
+# Parse allowed origins from environment
+if _env_origins:
+    origins = [o.strip() for o in _env_origins.split(",") if o.strip()]
+    _allowed_origins = origins
+else:
+    _allowed_origins = _default_allowed_origins
+
+# Support wildcard for all vercel.app domains if ALLOW_ALL_VERCEL is set
+if os.getenv("ALLOW_ALL_VERCEL", "").lower() == "true":
+    _allowed_origins.append("https://*.vercel.app")
+    
 # Log the configured origins for debugging
 print(f"CORS: Configured origins: {_allowed_origins}")
 print(f"CORS: Environment variable ALLOWED_ORIGINS: {_env_origins}")
+print(f"CORS: ALLOW_ALL_VERCEL: {os.getenv('ALLOW_ALL_VERCEL')}")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
-    allow_credentials=True,
+    allow_credentials=False,  # Changed to False for simpler CORS
     allow_methods=["*"],
     allow_headers=["*"],
 )
