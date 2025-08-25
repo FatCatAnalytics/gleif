@@ -2,7 +2,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card"
 import { Progress } from "../ui/progress"
 import { Badge } from "../ui/badge"
-import { Building2, Globe, TrendingUp, Users, Search, Database } from "lucide-react"
+import { Building2, Users, Search, Database } from "lucide-react"
 
 export function AnalyticsPage() {
   return (

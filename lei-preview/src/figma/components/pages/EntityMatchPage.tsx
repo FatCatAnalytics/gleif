@@ -7,8 +7,8 @@ import { Button } from "../ui/button"
 import { Input } from "../ui/input"
 import { Textarea } from "../ui/textarea"
 import { Progress } from "../ui/progress"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select"
-import { Search, Upload, Download, Target, CheckCircle, AlertCircle, XCircle, FileText, Trash2 } from "lucide-react"
+// removed unused Select imports
+import { Search, Upload, Download, Target, CheckCircle, AlertCircle, XCircle, Trash2 } from "lucide-react"
 
 interface MatchResult {
   inputEntity: string

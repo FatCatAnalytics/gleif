@@ -4,6 +4,7 @@ import asyncio
 import random
 import re
 import time
+import os
 from collections import deque
 from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional, Set
@@ -104,12 +105,20 @@ lei_cache = TTLCache(ttl_seconds=600)
 
 
 app = FastAPI(title="GLEIF Proxy API", version="0.1.0")
+
+# CORS origins: read from env var ALLOWED_ORIGINS (comma-separated), fallback to localhost
+_default_allowed_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+_env_origins = os.getenv("ALLOWED_ORIGINS")
+_allowed_origins = (
+    [o.strip() for o in _env_origins.split(",") if o.strip()] if _env_origins else _default_allowed_origins
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
