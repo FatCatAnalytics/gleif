@@ -120,18 +120,22 @@ if _env_origins:
 else:
     _allowed_origins = _default_allowed_origins
 
-# Support wildcard for all vercel.app domains if ALLOW_ALL_VERCEL is set
-if os.getenv("ALLOW_ALL_VERCEL", "").lower() == "true":
-    _allowed_origins.append("https://*.vercel.app")
+# Note: Wildcard support is handled via allow_origin_regex below
     
 # Log the configured origins for debugging
 print(f"CORS: Configured origins: {_allowed_origins}")
 print(f"CORS: Environment variable ALLOWED_ORIGINS: {_env_origins}")
 print(f"CORS: ALLOW_ALL_VERCEL: {os.getenv('ALLOW_ALL_VERCEL')}")
 
+# Configure CORS with regex support for Vercel domains
+allow_origin_regex = None
+if os.getenv("ALLOW_ALL_VERCEL", "").lower() == "true":
+    allow_origin_regex = r"https://.*\.vercel\.app"
+    
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
+    allow_origin_regex=allow_origin_regex,
     allow_credentials=False,  # Changed to False for simpler CORS
     allow_methods=["*"],
     allow_headers=["*"],
@@ -143,7 +147,9 @@ async def debug_cors():
     """Debug endpoint to check CORS configuration"""
     return {
         "configured_origins": _allowed_origins,
-        "env_value": os.getenv("ALLOWED_ORIGINS"),
+        "allow_origin_regex": allow_origin_regex,
+        "env_ALLOWED_ORIGINS": os.getenv("ALLOWED_ORIGINS"),
+        "env_ALLOW_ALL_VERCEL": os.getenv("ALLOW_ALL_VERCEL"),
         "default_origins": _default_allowed_origins,
     }
 
