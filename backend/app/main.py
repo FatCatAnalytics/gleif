@@ -125,6 +125,16 @@ app.add_middleware(
 )
 
 
+@app.get("/debug/cors")
+async def debug_cors():
+    """Debug endpoint to check CORS configuration"""
+    return {
+        "configured_origins": _allowed_origins,
+        "env_value": os.getenv("ALLOWED_ORIGINS"),
+        "default_origins": _default_allowed_origins,
+    }
+
+
 def _status_to_display(status: Optional[str]) -> Optional[str]:
     if not status:
         return None
