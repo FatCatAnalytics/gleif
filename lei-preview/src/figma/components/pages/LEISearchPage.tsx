@@ -204,7 +204,10 @@ export function LEISearchPage() {
             }
           })
         );
-        setSearchResults(withCounts);
+        const sortedByChildrenDesc = withCounts
+          .slice()
+          .sort((a, b) => (b.directChildrenCount ?? -1) - (a.directChildrenCount ?? -1));
+        setSearchResults(sortedByChildrenDesc);
         if (rows.length === 0) {
           toast.message("No results", {
             description: "No entities found matching your query.",
@@ -465,17 +468,20 @@ export function LEISearchPage() {
                               </DropdownMenuItem>
                               <DropdownMenuItem
                                 onClick={() => {
-                                  // Store LEI in sessionStorage and navigate.
-                                  // Also notify an already-mounted HierarchyPage to load immediately.
+                                  // Robust handoff: set storage first, navigate, then re-emit after mount tick
                                   try {
-                                    window.dispatchEvent(new CustomEvent('hierarchy:set-lei', { detail: { lei: result.lei } }))
+                                    sessionStorage.setItem('hierarchyLEI', result.lei)
                                   } catch {}
-                                  sessionStorage.setItem('hierarchyLEI', result.lei)
                                   window.dispatchEvent(new CustomEvent('navigate', { 
                                     detail: { 
                                       page: 'hierarchy'
                                     } 
                                   }));
+                                  setTimeout(() => {
+                                    try {
+                                      window.dispatchEvent(new CustomEvent('hierarchy:set-lei', { detail: { lei: result.lei } }))
+                                    } catch {}
+                                  }, 0)
                                 }}
                               >
                                 <Network className="h-4 w-4 mr-2" />

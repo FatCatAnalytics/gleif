@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card"
 import { Badge } from "../ui/badge"
 import { Button } from "../ui/button"
 import { Input } from "../ui/input"
-import { Search, ChevronRight, ChevronDown, Building2, Users, Percent, Calendar, Info } from "lucide-react"
+import { Search, ChevronRight, ChevronDown, Building2, Users, Percent, Calendar, Info, CheckCircle } from "lucide-react"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip"
+import { Alert, AlertDescription, AlertTitle } from "../ui/alert"
 // Lightweight map using remote TopoJSON and d3-geo for centroids
 import { geoEquirectangular, geoPath } from "d3-geo"
 import { feature } from "topojson-client"
@@ -41,6 +42,8 @@ export function HierarchyPage() {
   const [progress, setProgress] = useState<{ current: number; total: number }>({ current: 0, total: 0 })
   const [etaSec, setEtaSec] = useState<number | null>(null)
   const [childCounts, setChildCounts] = useState<Record<string, number>>({})
+  const deepRunIdRef = useRef(0)
+  const [deepStatus, setDeepStatus] = useState<{ loaded: number; total: number | null; inProgress: boolean }>({ loaded: 0, total: null, inProgress: false })
 
   useEffect(() => {
     const loadWorld = async () => {
@@ -281,6 +284,63 @@ export function HierarchyPage() {
     }
   }, [visibleNodeIds, API_BASE, childCounts])
 
+  useEffect(() => {
+    if (!tree) return
+    if (!tree.hasFetched || !(tree.children && tree.children.length > 0)) return
+    deepRunIdRef.current += 1
+    const runId = deepRunIdRef.current
+    setDeepStatus((s) => ({ loaded: (tree.children?.length || 0), total: s.total, inProgress: true }))
+    let cancelled = false
+
+    const bfs = async () => {
+      const queue: LazyNode[] = [...(tree.children || [])]
+      while (queue.length > 0 && !cancelled && deepRunIdRef.current === runId) {
+        const node = queue.shift() as LazyNode
+        if (!node.hasFetched) {
+          try {
+            const kids = await fetchChildren(node.entity.lei)
+            node.children = kids
+            node.hasFetched = true
+            for (const k of kids) queue.push(k)
+            setTree((prev) => (prev ? { ...prev } : prev))
+            setDeepStatus((s) => ({ ...s, loaded: s.loaded + kids.length }))
+          } catch {}
+        }
+        await new Promise((r) => setTimeout(r, 0))
+      }
+      if (!cancelled && deepRunIdRef.current === runId) {
+        setDeepStatus((s) => ({ ...s, inProgress: false }))
+      }
+    }
+
+    bfs()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tree?.entity?.lei, tree?.hasFetched, (tree?.children || []).length])
+
+  // Fetch authoritative shape (max depth, direct and ultimate children) from backend for accuracy
+  const [shape, setShape] = useState<{ maxDepth: number; directChildrenCount: number; descendantsCount: number; ultimateChildrenCount: number; visitedCount: number } | null>(null)
+  useEffect(() => {
+    const loadShape = async () => {
+      const lei = tree?.entity?.lei
+      if (!lei) return
+      try {
+        const res = await fetch(`${API_BASE}/api/lei/${encodeURIComponent(lei)}/hierarchy/shape`)
+        if (!res.ok) return
+        const json = await res.json()
+        setShape(json)
+      } catch {}
+    }
+    loadShape()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tree?.entity?.lei])
+
+  useEffect(() => {
+    if (shape && typeof shape.descendantsCount === 'number') {
+      setDeepStatus((s) => ({ ...s, total: shape.descendantsCount }))
+    }
+  }, [shape])
+
   
 
   const normalizeCountry = (candidate: string | undefined | null): string | null => {
@@ -454,23 +514,6 @@ export function HierarchyPage() {
     return totalNodesAndStats()
   }, [tree])
 
-  // Fetch authoritative shape (max depth, direct and ultimate children) from backend for accuracy
-  const [shape, setShape] = useState<{ maxDepth: number; directChildrenCount: number; descendantsCount: number; ultimateChildrenCount: number; visitedCount: number } | null>(null)
-  useEffect(() => {
-    const loadShape = async () => {
-      const lei = tree?.entity?.lei
-      if (!lei) return
-      try {
-        const res = await fetch(`${API_BASE}/api/lei/${encodeURIComponent(lei)}/hierarchy/shape`)
-        if (!res.ok) return
-        const json = await res.json()
-        setShape(json)
-      } catch {}
-    }
-    loadShape()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tree?.entity?.lei])
-
   return (
     <div className="p-6 space-y-6">
       <div>
@@ -512,6 +555,14 @@ export function HierarchyPage() {
                   {isLoading ? 'Loading...' : 'Load Hierarchy'}
                 </Button>
               </div>
+              {tree?.entity && (
+                <Alert>
+                  <AlertTitle>Ultimate parent</AlertTitle>
+                  <AlertDescription>
+                    {tree.entity.legalName || tree.entity.lei} ({tree.entity.lei})
+                  </AlertDescription>
+                </Alert>
+              )}
               {(isLoading || progress.total > 0) && (
                 <div className="text-xs text-muted-foreground mt-1">
                   {(() => {
@@ -588,6 +639,20 @@ export function HierarchyPage() {
                   <div className="h-2 bg-muted rounded">
                     <div className="h-2 bg-primary rounded" style={{ width: `${Math.round((progress.current / Math.max(progress.total, 1)) * 100)}%` }} />
                   </div>
+                  {progress.total > 0 && progress.current >= progress.total && (
+                    <div className="flex items-center gap-2 mt-2 text-xs text-green-700">
+                      <CheckCircle className="h-4 w-4" />
+                      <span>Direct children fully loaded</span>
+                    </div>
+                  )}
+                  {deepStatus.inProgress && (
+                    <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
+                      <span>
+                        Loading descendants in background
+                        {typeof deepStatus.total === 'number' ? ` (${Math.min(deepStatus.loaded, deepStatus.total)} / ${deepStatus.total})` : ` (${deepStatus.loaded})`}
+                      </span>
+                    </div>
+                  )}
                 </div>
               )}
             </CardContent>
@@ -838,12 +903,24 @@ export function HierarchyPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="text-center p-3 border rounded">
                     <Building2 className="h-6 w-6 mx-auto mb-2 text-muted-foreground" />
-                    <div className="text-2xl font-bold">{shape?.descendantsCount ? (shape.descendantsCount + 1) : (analysis?.total ?? 0)}</div>
+                    <div className="text-2xl font-bold">{
+                      typeof shape?.ultimateChildrenCount === 'number'
+                        ? (shape.ultimateChildrenCount + 1)
+                        : (typeof shape?.descendantsCount === 'number'
+                          ? (shape.descendantsCount + 1)
+                          : (analysis?.total ?? 0))
+                    }</div>
                     <div className="text-sm text-muted-foreground">Total Entities</div>
                   </div>
                   <div className="text-center p-3 border rounded">
                     <Users className="h-6 w-6 mx-auto mb-2 text-muted-foreground" />
-                    <div className="text-2xl font-bold">{shape?.descendantsCount ?? (analysis ? Math.max((analysis.total - 1), 0) : 0)}</div>
+                    <div className="text-2xl font-bold">{
+                      typeof shape?.ultimateChildrenCount === 'number'
+                        ? shape.ultimateChildrenCount
+                        : (typeof shape?.descendantsCount === 'number'
+                          ? shape.descendantsCount
+                          : (analysis ? Math.max((analysis.total - 1), 0) : 0))
+                    }</div>
                     <div className="text-sm text-muted-foreground">Subsidiaries</div>
                   </div>
                   <div className="text-center p-3 border rounded">

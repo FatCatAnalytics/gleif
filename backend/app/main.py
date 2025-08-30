@@ -142,6 +142,7 @@ app.add_middleware(
 )
 
 
+
 @app.get("/debug/cors")
 async def debug_cors():
     """Debug endpoint to check CORS configuration"""

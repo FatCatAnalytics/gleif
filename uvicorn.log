@@ -1,0 +1,9 @@
+INFO:     Started server process [85470]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+ERROR:    [Errno 48] error while attempting to bind on address ('127.0.0.1', 8000): address already in use
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+CORS: Configured origins: ['http://localhost:5173', 'http://127.0.0.1:5173']
+CORS: Environment variable ALLOWED_ORIGINS: None
+CORS: ALLOW_ALL_VERCEL: None
