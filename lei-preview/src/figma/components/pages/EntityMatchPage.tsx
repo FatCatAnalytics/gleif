@@ -8,19 +8,25 @@ import { Input } from "../ui/input"
 import { Textarea } from "../ui/textarea"
 import { Progress } from "../ui/progress"
 // removed unused Select imports
-import { Search, Upload, Download, Target, CheckCircle, AlertCircle, XCircle, Trash2 } from "lucide-react"
+import { Search, Upload, Download, Target, Trash2 } from "lucide-react"
 
-interface MatchResult {
-  inputEntity: string
-  matches: Array<{
-    lei: string
-    legalName: string
-    jurisdiction: string
-    status: string
-    confidence: number
-    matchType: string
-  }>
-}
+  interface MatchResult {
+    inputEntity: string
+    matches: Array<{
+      lei: string
+      legalName: string
+      jurisdiction: string
+      status: string
+      confidence: number
+      matchType: string
+    }>
+    selectedMatchIndex?: number
+    ultimateParent?: {
+      lei: string
+      legalName: string
+    }
+    relatedEntities?: string[]
+  }
 
 function normalizeEntityName(raw: string): string {
   const value = String(raw || "").toLowerCase()
@@ -116,8 +122,32 @@ export function EntityMatchPage() {
   const [isProcessing, setIsProcessing] = useState(false)
   const [processingProgress, setProcessingProgress] = useState(0)
   const [activeTab, setActiveTab] = useState("single")
+  
+  // Define calculateConfidence here using existing normalization functions
+  const calculateConfidence = (query: string, targetName: string): number => {
+    const normalizedQuery = normalizeEntityName(query)
+    const normalizedTarget = normalizeEntityName(targetName)
+    
+    // Exact match
+    if (normalizedQuery === normalizedTarget) return 100
+    
+    // Tokenize and check similarity
+    const queryTokens = tokenize(query)
+    const targetTokens = tokenize(targetName)
+    
+    // Jaccard similarity
+    const jaccard = jaccardSimilarity(queryTokens, targetTokens)
+    
+    // Levenshtein similarity
+    const lev = levenshteinSimilarity(normalizedQuery, normalizedTarget)
+    
+    // Combined score (weighted average)
+    const confidence = Math.round((jaccard * 0.5 + lev * 0.5) * 100)
+    
+    return Math.min(100, Math.max(0, confidence))
+  }
 
-  // Mock matching function - in real implementation this would call the LEI API
+  // Real matching function using LEI API
   const performMatching = async (entities: string[]): Promise<MatchResult[]> => {
     setIsProcessing(true)
     setProcessingProgress(0)
@@ -128,68 +158,116 @@ export function EntityMatchPage() {
       const entity = entities[i].trim()
       if (!entity) continue
       
-      // Simulate processing delay
-      await new Promise(resolve => setTimeout(resolve, 500))
-      setProcessingProgress(((i + 1) / entities.length) * 100)
+      setProcessingProgress(((i + 0.5) / entities.length) * 100)
       
-      // Mock matching logic
-      const mockMatches = generateMockMatches(entity)
-      results.push({
-        inputEntity: entity,
-        matches: mockMatches
-      })
-    }
-    
-    setIsProcessing(false)
-    return results
-  }
-
-  const generateMockMatches = (entity: string) => {
-    const mockDatabase = [
-      { lei: "5493001KJTIIGC8Y1R12", legalName: "Apple Inc.", jurisdiction: "US-DE", status: "Active" },
-      { lei: "HWUPKR0MPOU8FGXBT394", legalName: "Microsoft Corporation", jurisdiction: "US-WA", status: "Active" },
-      { lei: "213800MBFP4A78EHRX08", legalName: "Alphabet Inc.", jurisdiction: "US-DE", status: "Active" },
-      { lei: "ZRXASR1D6DC9D35SZC58", legalName: "Amazon.com, Inc.", jurisdiction: "US-DE", status: "Active" },
-      { lei: "RJQG2KE8X67M2C5K8Q67", legalName: "Tesla, Inc.", jurisdiction: "US-DE", status: "Active" },
-      { lei: "MQXJ7KE8X67M2C5K8Q69", legalName: "Meta Platforms, Inc.", jurisdiction: "US-DE", status: "Active" },
-      { lei: "NRXJ8KE8X67M2C5K8Q70", legalName: "Netflix, Inc.", jurisdiction: "US-DE", status: "Active" },
-    ]
-
-    const matches = []
-    const entityLower = entity.toLowerCase()
-
-    for (const record of mockDatabase) {
-      const nameLower = record.legalName.toLowerCase()
-      let confidence = 0
-      let matchType = ""
-
-      // Exact match
-      if (nameLower === entityLower) {
-        confidence = 100
-        matchType = "Exact"
-      }
-      // Contains match
-      else if (nameLower.includes(entityLower) || entityLower.includes(nameLower)) {
-        confidence = Math.random() * 30 + 70 // 70-100%
-        matchType = "Contains"
-      }
-      // Fuzzy match (simple word matching)
-      else if (entityLower.split(' ').some(word => nameLower.includes(word) && word.length > 2)) {
-        confidence = Math.random() * 40 + 40 // 40-80%
-        matchType = "Fuzzy"
-      }
-
-      if (confidence > 0) {
-        matches.push({
-          ...record,
-          confidence: Math.round(confidence),
-          matchType
+      try {
+        // Search using the LEI API
+        const searchRes = await fetch(`${API_BASE}/api/search?q=${encodeURIComponent(entity)}`)
+        let finalMatches: any[] = []
+        
+        if (searchRes.ok) {
+          const searchData = await searchRes.json()
+          console.log(`Search data for ${entity}:`, searchData)
+          
+          if (Array.isArray(searchData) && searchData.length > 0) {
+            const matches: any[] = []
+            
+            // Calculate confidence scores for each result
+            for (const row of searchData) {
+              if (row.lei && row.legalName) {
+                const confidence = calculateConfidence(entity, row.legalName)
+                matches.push({
+                  lei: row.lei,
+                  legalName: row.legalName,
+                  jurisdiction: row.jurisdiction || 'N/A',
+                  status: row.entityStatus || 'Active',
+                  confidence,
+                  matchType: confidence === 100 ? 'Exact' : confidence >= 80 ? 'Strong' : confidence >= 60 ? 'Partial' : 'Weak'
+                })
+              }
+            }
+            
+            // Sort by confidence and take top 3
+            matches.sort((a, b) => b.confidence - a.confidence)
+            const top3Matches = matches.slice(0, 3)
+            
+            // Add children count bonus
+            finalMatches = await Promise.all(
+              top3Matches.map(async (match) => {
+                try {
+                  const childrenRes = await fetch(`${API_BASE}/api/lei/${encodeURIComponent(match.lei)}/direct-children/count`)
+                  if (childrenRes.ok) {
+                    const count = await childrenRes.json()
+                    const childrenBonus = Math.min(10, count / 2) // Max 10 bonus
+                    return { ...match, confidence: Math.min(100, match.confidence + childrenBonus) }
+                  }
+                } catch (e) {
+                  console.warn(`Failed to fetch children count for ${match.lei}:`, e)
+                }
+                return match
+              })
+            )
+            
+            finalMatches.sort((a, b) => b.confidence - a.confidence)
+          }
+        }
+        
+        // Always add a result entry, even if no matches found
+        // Auto-select first match if available
+        const resultEntry: MatchResult = {
+          inputEntity: entity,
+          matches: finalMatches,
+          selectedMatchIndex: finalMatches.length > 0 ? 0 : undefined
+        }
+        
+        // If we have a match selected, fetch its ultimate parent immediately
+        if (finalMatches.length > 0) {
+          try {
+            const selectedMatch = finalMatches[0]
+            const ultimateParentRes = await fetch(`${API_BASE}/api/lei/${encodeURIComponent(selectedMatch.lei)}/ultimate-parent/row`)
+            if (ultimateParentRes.ok) {
+              const parentData = await ultimateParentRes.json()
+              resultEntry.ultimateParent = {
+                lei: parentData.lei,
+                legalName: parentData.legalName
+              }
+            } else {
+              // No ultimate parent found, entity is its own ultimate parent
+              resultEntry.ultimateParent = {
+                lei: selectedMatch.lei,
+                legalName: selectedMatch.legalName
+              }
+            }
+          } catch (error) {
+            console.error('Error fetching ultimate parent:', error)
+            // Default to self as ultimate parent on error
+            resultEntry.ultimateParent = {
+              lei: finalMatches[0].lei,
+              legalName: finalMatches[0].legalName
+            }
+          }
+        }
+        
+        results.push(resultEntry)
+      } catch (error) {
+        console.error(`Error searching for ${entity}:`, error)
+        results.push({
+          inputEntity: entity,
+          matches: []
         })
       }
+      
+      setProcessingProgress(((i + 1) / entities.length) * 100)
     }
-
-    return matches.sort((a, b) => b.confidence - a.confidence).slice(0, 5)
+    
+    // Find related entities based on shared ultimate parents
+    const finalResults = findRelatedEntities(results)
+    
+    setIsProcessing(false)
+    return finalResults
   }
+
+
 
   const handleSingleSearch = async () => {
     const query = singleEntity.trim()
@@ -248,8 +326,11 @@ export function EntityMatchPage() {
   const handleBulkSearch = async () => {
     const entities = bulkEntities.split(/[,\n]/).map(e => e.trim()).filter(e => e)
     if (entities.length === 0) return
+    console.log('Searching for entities:', entities)
     const results = await performMatching(entities)
+    console.log('Search results:', results)
     setMatchingResults(results)
+    setActiveTab('results') // Switch to results tab after search
   }
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -260,6 +341,88 @@ export function EntityMatchPage() {
     const entities = text.split(/[,\n]/).map(e => e.trim()).filter(e => e)
     const results = await performMatching(entities)
     setMatchingResults(results)
+    setActiveTab('results') // Switch to results tab after search
+  }
+
+  const findRelatedEntities = (results: MatchResult[]) => {
+    // Group entities by ultimate parent LEI
+    const parentGroups: { [parentLei: string]: number[] } = {}
+    
+    results.forEach((result, index) => {
+      if (result.ultimateParent && result.selectedMatchIndex !== undefined) {
+        const parentLei = result.ultimateParent.lei
+        if (!parentGroups[parentLei]) {
+          parentGroups[parentLei] = []
+        }
+        parentGroups[parentLei].push(index)
+      }
+    })
+    
+    // Update each result with its related entities
+    const updatedResults = results.map((result, index) => {
+      if (result.ultimateParent && result.selectedMatchIndex !== undefined) {
+        const parentLei = result.ultimateParent.lei
+        const relatedIndexes = parentGroups[parentLei] || []
+        
+        // Get related entities (excluding self) using the selected match legal names
+        const relatedEntities = relatedIndexes
+          .filter(idx => idx !== index)
+          .map(idx => {
+            const relatedResult = results[idx]
+            if (relatedResult.selectedMatchIndex !== undefined) {
+              const selectedMatch = relatedResult.matches[relatedResult.selectedMatchIndex]
+              return selectedMatch.legalName
+            }
+            return relatedResult.inputEntity // fallback to input name if no selection
+          })
+        
+        return {
+          ...result,
+          relatedEntities: relatedEntities.length > 0 ? relatedEntities : undefined
+        }
+      }
+      return result
+    })
+    
+    return updatedResults
+  }
+
+  const handleMatchSelection = async (resultIndex: number, matchIndex: number) => {
+    const updatedResults = [...matchingResults]
+    const result = updatedResults[resultIndex]
+    const selectedMatch = result.matches[matchIndex]
+    
+    // Set selected match index
+    result.selectedMatchIndex = matchIndex
+    
+    // Fetch ultimate parent
+    try {
+      const ultimateParentRes = await fetch(`${API_BASE}/api/lei/${encodeURIComponent(selectedMatch.lei)}/ultimate-parent/row`)
+      if (ultimateParentRes.ok) {
+        const parentData = await ultimateParentRes.json()
+        result.ultimateParent = {
+          lei: parentData.lei,
+          legalName: parentData.legalName
+        }
+      } else {
+        // No ultimate parent found, entity is its own ultimate parent
+        result.ultimateParent = {
+          lei: selectedMatch.lei,
+          legalName: selectedMatch.legalName
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching ultimate parent:', error)
+      // Default to self as ultimate parent on error
+      result.ultimateParent = {
+        lei: selectedMatch.lei,
+        legalName: selectedMatch.legalName
+      }
+    }
+    
+    // Find related entities based on shared ultimate parents
+    const finalResults = findRelatedEntities(updatedResults)
+    setMatchingResults(finalResults)
   }
 
   const getConfidenceColor = (confidence: number) => {
@@ -268,20 +431,18 @@ export function EntityMatchPage() {
     return "text-red-600"
   }
 
-  const getConfidenceIcon = (confidence: number) => {
-    if (confidence >= 90) return <CheckCircle className="h-4 w-4 text-green-600" />
-    if (confidence >= 70) return <AlertCircle className="h-4 w-4 text-yellow-600" />
-    return <XCircle className="h-4 w-4 text-red-600" />
-  }
+
 
   const exportResults = () => {
     const csvContent = [
-      "Input Entity,LEI Code,Legal Name,Jurisdiction,Status,Confidence,Match Type",
-      ...matchingResults.flatMap(result =>
-        result.matches.map(match =>
-          `"${result.inputEntity}","${match.lei}","${match.legalName}","${match.jurisdiction}","${match.status}",${match.confidence},"${match.matchType}"`
-        )
-      )
+      "Input Entity,Selected Match LEI,Selected Match Name,Ultimate Parent LEI,Ultimate Parent Name",
+      ...matchingResults.map(result => {
+        if (result.selectedMatchIndex !== undefined && result.matches[result.selectedMatchIndex]) {
+          const selectedMatch = result.matches[result.selectedMatchIndex]
+          return `"${result.inputEntity}","${selectedMatch.lei}","${selectedMatch.legalName}","${result.ultimateParent?.lei || ''}","${result.ultimateParent?.legalName || ''}"`
+        }
+        return `"${result.inputEntity}","No match selected","","",""`
+      })
     ].join('\n')
 
     const blob = new Blob([csvContent], { type: 'text/csv' })
@@ -460,73 +621,144 @@ export function EntityMatchPage() {
                 </Button>
               </div>
 
-              <div className="space-y-4">
-                {matchingResults.map((result, index) => (
-                  <Card key={index}>
-                    <CardHeader>
-                      <div className="flex items-center justify-between">
-                        <CardTitle className="text-base">
-                          Input: "{result.inputEntity}"
-                        </CardTitle>
-                        <Badge variant="outline">
-                          {result.matches.length} matches found
-                        </Badge>
-                      </div>
-                    </CardHeader>
-                    <CardContent>
-                      {result.matches.length > 0 ? (
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead>Confidence</TableHead>
-                              <TableHead>LEI Code</TableHead>
-                              <TableHead>Legal Name</TableHead>
-                              <TableHead>Jurisdiction</TableHead>
-                              <TableHead>Status</TableHead>
-                              <TableHead>Match Type</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {result.matches.map((match, matchIndex) => (
-                              <TableRow key={matchIndex}>
-                                <TableCell>
-                                  <div className="flex items-center gap-2">
-                                    {getConfidenceIcon(match.confidence)}
-                                    <span className={getConfidenceColor(match.confidence)}>
-                                      {match.confidence}%
-                                    </span>
+              <Card>
+                <CardContent className="p-0">
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="sticky left-0 bg-background z-10">Entity Searched</TableHead>
+                          <TableHead>Match 1</TableHead>
+                          <TableHead>Match 2</TableHead>
+                          <TableHead>Match 3</TableHead>
+                          <TableHead>Selected Match</TableHead>
+                          <TableHead>Ultimate Parent</TableHead>
+                          <TableHead>Related To</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {matchingResults.map((result, resultIndex) => {
+                          const selectedMatch = result.selectedMatchIndex !== undefined ? result.matches[result.selectedMatchIndex] : null
+                          
+                          return (
+                            <TableRow key={resultIndex}>
+                              <TableCell className="sticky left-0 bg-background z-10 font-medium">
+                                {result.inputEntity}
+                              </TableCell>
+                              
+                              {/* Match 1, 2, 3 columns */}
+                              {[0, 1, 2].map((matchIndex) => {
+                                const match = result.matches[matchIndex]
+                                const isSelected = result.selectedMatchIndex === matchIndex
+                                
+                                if (!match) {
+                                  return (
+                                    <TableCell key={matchIndex} className="text-center text-muted-foreground">
+                                      No match
+                                    </TableCell>
+                                  )
+                                }
+                                
+                                return (
+                                  <TableCell key={matchIndex} className={isSelected ? "bg-blue-50" : ""}>
+                                    <button
+                                      onClick={() => handleMatchSelection(resultIndex, matchIndex)}
+                                      className="text-left w-full p-2 hover:bg-gray-50 rounded transition-colors"
+                                    >
+                                      <div className="space-y-1">
+                                        <div className="font-medium">{match.legalName}</div>
+                                        <div className="text-xs text-muted-foreground">
+                                          LEI: {match.lei}
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                          <Badge variant="outline" className="text-xs">
+                                            {match.matchType}
+                                          </Badge>
+                                          <span className={`text-xs ${getConfidenceColor(match.confidence)}`}>
+                                            {match.confidence}%
+                                          </span>
+                                        </div>
+                                        {isSelected && (
+                                          <Badge variant="default" className="text-xs">
+                                            Selected
+                                          </Badge>
+                                        )}
+                                      </div>
+                                    </button>
+                                  </TableCell>
+                                )
+                              })}
+                              
+                              {/* Selected Match column */}
+                              <TableCell>
+                                {selectedMatch ? (
+                                  <div className="space-y-1 bg-green-50 p-2 rounded">
+                                    <div className="font-medium">{selectedMatch.legalName}</div>
+                                    <div className="text-xs text-muted-foreground">
+                                      LEI: {selectedMatch.lei}
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <Badge variant="outline" className="text-xs">
+                                        {selectedMatch.matchType}
+                                      </Badge>
+                                      <span className={`text-xs ${getConfidenceColor(selectedMatch.confidence)}`}>
+                                        {selectedMatch.confidence}%
+                                      </span>
+                                    </div>
                                   </div>
-                                </TableCell>
-                                <TableCell>
-                                  <div className="font-mono text-sm">{match.lei}</div>
-                                </TableCell>
-                                <TableCell>
-                                  <div className="font-medium">{match.legalName}</div>
-                                </TableCell>
-                                <TableCell>{match.jurisdiction}</TableCell>
-                                <TableCell>
-                                  <Badge variant={match.status === 'Active' ? 'default' : 'secondary'}>
-                                    {match.status}
-                                  </Badge>
-                                </TableCell>
-                                <TableCell>
-                                  <Badge variant="outline">{match.matchType}</Badge>
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                      ) : (
-                        <div className="text-center py-4 text-muted-foreground">
-                          <XCircle className="h-8 w-8 mx-auto mb-2" />
-                          <p>No matches found for this entity</p>
-                          <p className="text-sm">Try using a different variation of the entity name</p>
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
+                                ) : (
+                                  <div className="text-center text-muted-foreground text-sm">
+                                    No match selected
+                                  </div>
+                                )}
+                              </TableCell>
+                              
+                              {/* Ultimate Parent column */}
+                              <TableCell>
+                                {result.ultimateParent ? (
+                                  <div className="space-y-1">
+                                    <div className="font-medium">{result.ultimateParent.legalName}</div>
+                                    <div className="text-xs text-muted-foreground">
+                                      LEI: {result.ultimateParent.lei}
+                                    </div>
+                                    {result.ultimateParent.lei === selectedMatch?.lei && (
+                                      <Badge variant="secondary" className="text-xs">
+                                        Self (No parent)
+                                      </Badge>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div className="text-center text-muted-foreground text-sm">
+                                    {selectedMatch ? 'Loading...' : 'No match selected'}
+                                  </div>
+                                )}
+                              </TableCell>
+                              
+                              {/* Related To column */}
+                              <TableCell>
+                                {result.relatedEntities && result.relatedEntities.length > 0 ? (
+                                  <div className="space-y-1">
+                                    <div className="text-sm font-medium text-blue-600">
+                                      {result.relatedEntities.join(", ")}
+                                    </div>
+                                    <div className="text-xs text-muted-foreground">
+                                      Shares same ultimate parent
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="text-center text-muted-foreground text-sm">
+                                    No related entities
+                                  </div>
+                                )}
+                              </TableCell>
+                            </TableRow>
+                          )
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </CardContent>
+              </Card>
             </>
           ) : (
             <Card>
@@ -537,8 +769,8 @@ export function EntityMatchPage() {
                   Use the search tabs above to find entity matches
                 </p>
                 <div className="flex justify-center gap-2">
-                  <Button variant="outline" onClick={() => window.dispatchEvent(new CustomEvent('navigate', { detail: { page: 'entity-match' } }))}>
-                    Start Single Search
+                  <Button variant="outline" onClick={() => setActiveTab('bulk')}>
+                    Start Bulk Search
                   </Button>
                 </div>
               </CardContent>
