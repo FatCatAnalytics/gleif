@@ -531,9 +531,9 @@ export function HierarchyPage() {
   return (
     <div className="p-6 space-y-6">
       <div>
-        <h1>Corporate Hierarchy</h1>
+        <h1>FatCat Hierarchy Explorer</h1>
         <p className="text-muted-foreground">
-          Visualize ownership structures and relationships between legal entities.
+          Visualize ownership structures and relationships between legal entities. FatCat reveals the corporate family tree.
         </p>
       </div>
 

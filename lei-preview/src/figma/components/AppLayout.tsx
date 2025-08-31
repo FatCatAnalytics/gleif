@@ -5,6 +5,7 @@ import { Button } from "./ui/button"
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu"
 import { Bell, Settings, LogOut, User, Home, Search, Target, Network, BarChart3, FileText, Sun, Moon } from "lucide-react"
+import FatCatLogo from "../../assets/fatcat-logo.png"
 
 interface AppLayoutProps {
   children: React.ReactNode
@@ -29,10 +30,10 @@ export function AppLayout({ children }: AppLayoutProps) {
         <Sidebar>
           <SidebarHeader>
             <div className="flex items-center gap-2 px-4 py-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                <Target className="h-4 w-4" />
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-white">
+                <img src={FatCatLogo} alt="FatCat Logo" className="h-6 w-6" />
               </div>
-              <span className="font-semibold">GLEIF LEI Portal</span>
+              <span className="font-semibold">FatCat Hierarchy Hub</span>
             </div>
           </SidebarHeader>
           <SidebarContent>

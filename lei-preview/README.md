@@ -1,6 +1,6 @@
-# React + TypeScript + Vite
+# FatCat Hierarchy Hub
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A comprehensive full-stack application for analyzing Legal Entity Identifier (LEI) data from the Global Legal Entity Identifier Foundation (GLEIF), featuring advanced search capabilities, corporate hierarchy visualization, and entity relationship matching. FatCat makes corporate structure analysis both powerful and approachable.
 
 Currently, two official plugins are available:
 

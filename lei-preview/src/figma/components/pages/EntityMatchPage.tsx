@@ -298,9 +298,9 @@ export function EntityMatchPage() {
   return (
     <div className="p-6 space-y-6">
       <div>
-        <h1>Entity Matching Tool</h1>
+        <h1>FatCat Entity Matcher</h1>
         <p className="text-muted-foreground">
-          Find matching LEI records for your entities using single search, bulk input, or CSV upload.
+          Find matching LEI records for your entities using single search, bulk input, or CSV upload. FatCat makes entity matching precise and effortless.
         </p>
       </div>
 

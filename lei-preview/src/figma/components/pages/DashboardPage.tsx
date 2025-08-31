@@ -8,9 +8,9 @@ export function DashboardPage() {
   return (
     <div className="p-6 space-y-6">
       <div>
-        <h1>LEI Dashboard</h1>
+        <h1>FatCat Dashboard</h1>
         <p className="text-muted-foreground">
-          Welcome to the GLEIF LEI Portal. Monitor global LEI activity and manage entity identifiers.
+          Welcome to FatCat Hierarchy Hub. Monitor global LEI activity and explore corporate structures with style.
         </p>
       </div>
       
