@@ -278,10 +278,10 @@ export function LEISearchPage() {
   return (
     <div className="p-6 space-y-6">
       <div>
-        <h1>LEI Search</h1>
+        <h1>FatCat LEI Search</h1>
         <p className="text-muted-foreground">
           Search for Legal Entity Identifiers by LEI code,
-          entity name, or other criteria.
+          entity name, or other criteria with FatCat's intelligent search.
         </p>
       </div>
 

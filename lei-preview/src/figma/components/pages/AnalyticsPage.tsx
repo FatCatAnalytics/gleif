@@ -8,9 +8,9 @@ export function AnalyticsPage() {
   return (
     <div className="p-6 space-y-6">
       <div>
-        <h1>LEI Analytics</h1>
+        <h1>FatCat Analytics</h1>
         <p className="text-muted-foreground">
-          Comprehensive analytics and insights into global LEI data and usage patterns.
+          Comprehensive analytics and insights into global LEI data and usage patterns. Let FatCat crunch the numbers for you.
         </p>
       </div>
       

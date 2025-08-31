@@ -15,8 +15,8 @@ function ReportsPage() {
   return (
     <div className="p-6 space-y-6">
       <div>
-        <h1>LEI Reports</h1>
-        <p className="text-muted-foreground">Generate and manage LEI data reports and analytics.</p>
+        <h1>FatCat Reports</h1>
+        <p className="text-muted-foreground">Generate and manage LEI data reports and analytics with FatCat's powerful tools.</p>
       </div>
       
       <Tabs defaultValue="standard-reports" className="space-y-4">
