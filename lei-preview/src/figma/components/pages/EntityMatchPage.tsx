@@ -22,12 +22,100 @@ interface MatchResult {
   }>
 }
 
+function normalizeEntityName(raw: string): string {
+  const value = String(raw || "").toLowerCase()
+  const cleaned = value
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9\s\.\-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+  const suffixes = [
+    "inc", "inc.", "corp", "corp.", "corporation", "co", "co.", "company", "ltd", "ltd.",
+    "limited", "llc", "plc", "gmbh", "ag", "s.a.", "s.a", "sa", "srl", "bv", "oy", "ab",
+  ]
+  const tokens = cleaned.split(" ")
+  const filtered = tokens.filter((t) => !suffixes.includes(t))
+  return filtered.join(" ").trim()
+}
+
+function tokenize(value: string): string[] {
+  return normalizeEntityName(value).split(" ").filter(Boolean)
+}
+
+function jaccardSimilarity(a: string[], b: string[]): number {
+  if (a.length === 0 && b.length === 0) return 1
+  const setA = new Set(a)
+  const setB = new Set(b)
+  let intersection = 0
+  for (const t of setA) if (setB.has(t)) intersection += 1
+  const union = setA.size + setB.size - intersection
+  return union === 0 ? 0 : intersection / union
+}
+
+function levenshteinSimilarity(a: string, b: string): number {
+  const s = normalizeEntityName(a)
+  const t = normalizeEntityName(b)
+  const n = s.length
+  const m = t.length
+  if (n === 0 && m === 0) return 1
+  if (n === 0 || m === 0) return 0
+  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0))
+  for (let i = 0; i <= n; i++) dp[i][0] = i
+  for (let j = 0; j <= m; j++) dp[0][j] = j
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      const cost = s[i - 1] === t[j - 1] ? 0 : 1
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + cost,
+      )
+    }
+  }
+  const distance = dp[n][m]
+  const maxLen = Math.max(n, m)
+  return maxLen === 0 ? 1 : 1 - distance / maxLen
+}
+
+function computeMatchConfidence(query: string, candidate: string): { score: number; kind: string } {
+  const normQ = normalizeEntityName(query)
+  const normC = normalizeEntityName(candidate)
+  if (!normQ || !normC) return { score: 0, kind: "None" }
+  if (normQ === normC) return { score: 100, kind: "Exact" }
+
+  const tokensQ = tokenize(normQ)
+  const tokensC = tokenize(normC)
+  const tokenSim = jaccardSimilarity(tokensQ, tokensC) // 0..1
+  const editSim = levenshteinSimilarity(normQ, normC)   // 0..1
+
+  let score = 0
+  // Weighted blend emphasizes overall string similarity and token overlap
+  score += 60 * editSim
+  score += 35 * tokenSim
+
+  // Prefix/contains bonuses
+  if (normC.startsWith(normQ)) score += 5
+  else if (normC.includes(normQ)) score += 3
+
+  // Strong token coverage bonus
+  const covered = tokensQ.filter((t) => tokensC.includes(t)).length
+  if (tokensQ.length > 0 && covered === tokensQ.length) score += 2
+
+  // Cap to [0,100]
+  score = Math.max(0, Math.min(100, Math.round(score)))
+
+  const kind = score >= 95 ? "Exact" : score >= 85 ? "Strong" : score >= 70 ? "Partial" : "Weak"
+  return { score, kind }
+}
+
 export function EntityMatchPage() {
+  const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL || "http://localhost:8000"
   const [singleEntity, setSingleEntity] = useState("")
   const [bulkEntities, setBulkEntities] = useState("")
   const [matchingResults, setMatchingResults] = useState<MatchResult[]>([])
   const [isProcessing, setIsProcessing] = useState(false)
   const [processingProgress, setProcessingProgress] = useState(0)
+  const [activeTab, setActiveTab] = useState("single")
 
   // Mock matching function - in real implementation this would call the LEI API
   const performMatching = async (entities: string[]): Promise<MatchResult[]> => {
@@ -104,9 +192,57 @@ export function EntityMatchPage() {
   }
 
   const handleSingleSearch = async () => {
-    if (!singleEntity.trim()) return
-    const results = await performMatching([singleEntity])
-    setMatchingResults(results)
+    const query = singleEntity.trim()
+    if (!query) return
+    try {
+      setIsProcessing(true)
+      // Use backend search like LEISearchPage
+      const res = await fetch(`${API_BASE}/api/search?q=${encodeURIComponent(query)}`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const rows = (await res.json()) as Array<{ lei: string; legalName?: string; jurisdiction?: string; status?: string }>
+
+      // Fetch direct-children counts to boost likely parent entities
+      const countsEntries = await Promise.all(
+        rows.map(async (r) => {
+          try {
+            const cRes = await fetch(`${API_BASE}/api/lei/${encodeURIComponent(r.lei)}/direct-children/count`)
+            if (!cRes.ok) return [r.lei, 0] as const
+            const n = await cRes.json()
+            return [r.lei, Number(n) || 0] as const
+          } catch {
+            return [r.lei, 0] as const
+          }
+        })
+      )
+      const childrenCounts: Record<string, number> = {}
+      for (const [lei, n] of countsEntries) childrenCounts[lei] = n
+      const maxChildren = Math.max(1, ...Object.values(childrenCounts))
+
+      const matches = rows.map((r) => {
+        const name = r.legalName || r.lei
+        const { score, kind } = computeMatchConfidence(query, name)
+        // Children bonus up to +10 scaled by relative fan-out
+        const childCount = childrenCounts[r.lei] || 0
+        const childrenBonus = childCount > 0 ? Math.min(10, Math.round((childCount / maxChildren) * 10)) : 0
+        const boosted = Math.min(100, score + childrenBonus)
+        return {
+          lei: r.lei,
+          legalName: name,
+          jurisdiction: r.jurisdiction || "",
+          status: r.status || "",
+          confidence: boosted,
+          matchType: kind,
+        }
+      }).sort((a, b) => b.confidence - a.confidence)
+      const result: MatchResult = { inputEntity: query, matches }
+      setMatchingResults([result])
+      setActiveTab("results")
+    } catch (e) {
+      setMatchingResults([{ inputEntity: query, matches: [] }])
+      setActiveTab("results")
+    } finally {
+      setIsProcessing(false)
+    }
   }
 
   const handleBulkSearch = async () => {
@@ -168,7 +304,7 @@ export function EntityMatchPage() {
         </p>
       </div>
 
-      <Tabs defaultValue="single" className="space-y-4">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
         <TabsList>
           <TabsTrigger value="single">Single Entity</TabsTrigger>
           <TabsTrigger value="bulk">Bulk Input</TabsTrigger>
@@ -191,7 +327,7 @@ export function EntityMatchPage() {
                     className="pl-8"
                     value={singleEntity}
                     onChange={(e) => setSingleEntity(e.target.value)}
-                    onKeyPress={(e) => e.key === 'Enter' && handleSingleSearch()}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleSingleSearch() }}
                   />
                 </div>
                 <Button onClick={handleSingleSearch} disabled={isProcessing}>

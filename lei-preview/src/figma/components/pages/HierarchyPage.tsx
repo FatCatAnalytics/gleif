@@ -34,7 +34,7 @@ interface LazyNode {
 
 export function HierarchyPage() {
   const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL || "http://localhost:8000"
-  const [searchLEI, setSearchLEI] = useState("5493001KJTIIGC8Y1R12")
+  const [searchLEI, setSearchLEI] = useState("")
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set())
   const [isLoading, setIsLoading] = useState(false)
   const [tree, setTree] = useState<LazyNode | null>(null)
@@ -68,8 +68,6 @@ export function HierarchyPage() {
       sessionStorage.removeItem('hierarchyLEI')
       setSearchLEI(lei)
       void loadHierarchy(lei)
-    } else if (!tree && searchLEI) {
-      void loadHierarchy()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -284,39 +282,55 @@ export function HierarchyPage() {
     }
   }, [visibleNodeIds, API_BASE, childCounts])
 
+  // Start background deep loading when direct children are loaded
   useEffect(() => {
-    if (!tree) return
-    if (!tree.hasFetched || !(tree.children && tree.children.length > 0)) return
+    if (!tree?.hasFetched || !tree.children?.length) return
+    
     deepRunIdRef.current += 1
     const runId = deepRunIdRef.current
-    setDeepStatus((s) => ({ loaded: (tree.children?.length || 0), total: s.total, inProgress: true }))
     let cancelled = false
+    
+    setDeepStatus({ loaded: tree.children?.length || 0, total: null, inProgress: true })
 
-    const bfs = async () => {
+    const deepLoadAllDescendants = async () => {
       const queue: LazyNode[] = [...(tree.children || [])]
+      let totalLoaded = tree.children?.length || 0
+
       while (queue.length > 0 && !cancelled && deepRunIdRef.current === runId) {
-        const node = queue.shift() as LazyNode
+        const node = queue.shift()!
+        
         if (!node.hasFetched) {
           try {
             const kids = await fetchChildren(node.entity.lei)
             node.children = kids
             node.hasFetched = true
-            for (const k of kids) queue.push(k)
-            setTree((prev) => (prev ? { ...prev } : prev))
-            setDeepStatus((s) => ({ ...s, loaded: s.loaded + kids.length }))
-          } catch {}
+            
+            // Add children to queue for next level
+            queue.push(...kids)
+            totalLoaded += kids.length
+            
+            // Update tree and progress
+            setTree(prev => prev ? { ...prev } : prev)
+            setDeepStatus(s => ({ ...s, loaded: totalLoaded }))
+            
+          } catch (err) {
+            console.warn('Failed to fetch children for', node.entity.lei, err)
+          }
         }
-        await new Promise((r) => setTimeout(r, 0))
+        
+        // Yield to keep UI responsive
+        await new Promise(resolve => setTimeout(resolve, 10))
       }
+      
       if (!cancelled && deepRunIdRef.current === runId) {
-        setDeepStatus((s) => ({ ...s, inProgress: false }))
+        setDeepStatus(s => ({ ...s, inProgress: false }))
       }
     }
 
-    bfs()
+    deepLoadAllDescendants()
+    
     return () => { cancelled = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tree?.entity?.lei, tree?.hasFetched, (tree?.children || []).length])
+  }, [tree?.entity?.lei, tree?.hasFetched, tree?.children?.length])
 
   // Fetch authoritative shape (max depth, direct and ultimate children) from backend for accuracy
   const [shape, setShape] = useState<{ maxDepth: number; directChildrenCount: number; descendantsCount: number; ultimateChildrenCount: number; visitedCount: number } | null>(null)
@@ -560,25 +574,81 @@ export function HierarchyPage() {
                   <AlertTitle>Ultimate parent</AlertTitle>
                   <AlertDescription>
                     {tree.entity.legalName || tree.entity.lei} ({tree.entity.lei})
+                    {shape && (
+                      <div className="mt-2 text-sm text-muted-foreground">
+                        {typeof shape.directChildrenCount === 'number' && (
+                          <span>Direct children: {shape.directChildrenCount}</span>
+                        )}
+                        {typeof shape.ultimateChildrenCount === 'number' && (
+                          <>
+                            {typeof shape.directChildrenCount === 'number' && ' • '}
+                            Ultimate children: {shape.ultimateChildrenCount}
+                          </>
+                        )}
+                      </div>
+                    )}
                   </AlertDescription>
                 </Alert>
               )}
-              {(isLoading || progress.total > 0) && (
-                <div className="text-xs text-muted-foreground mt-1">
-                  {(() => {
-                    const c = Math.min(progress.current, progress.total)
-                    const t = progress.total
-                    const pct = t > 0 ? Math.round((c / t) * 100) : 0
-                    const secs = etaSec ?? null
-                    const fmt = (s: number) => {
-                      const sec = Math.max(0, Math.round(s))
-                      const m = Math.floor(sec / 60)
-                      const r = sec % 60
-                      return `${m}:${String(r).padStart(2, '0')}`
-                    }
-                    const etaText = secs !== null && secs > 0 ? ` • ≈ ${fmt(secs)} remaining` : secs === 0 ? ' • Done' : ''
-                    return t > 0 ? `Loading direct children (${c} / ${t}, ${pct}%)${etaText}` : 'Preparing...'
-                  })()}
+              
+              {/* Direct Children Progress */}
+              {(isLoading || (progress.total > 0 && progress.current < progress.total)) && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <div className="w-3 h-3 border-2 border-gray-300 border-t-blue-600 rounded-full animate-spin"></div>
+                    <span>
+                      {(() => {
+                        const c = Math.min(progress.current, progress.total)
+                        const t = progress.total
+                        const pct = t > 0 ? Math.round((c / t) * 100) : 0
+                        const secs = etaSec ?? null
+                        const fmt = (s: number) => {
+                          const sec = Math.max(0, Math.round(s))
+                          const m = Math.floor(sec / 60)
+                          const r = sec % 60
+                          return `${m}:${String(r).padStart(2, '0')}`
+                        }
+                        const etaText = secs !== null && secs > 0 ? ` • ≈ ${fmt(secs)} remaining` : secs === 0 ? ' • Done' : ''
+                        return t > 0 ? `Loading direct children (${c} / ${t}, ${pct}%)${etaText}` : 'Preparing...'
+                      })()}
+                    </span>
+                  </div>
+                  <div className="h-2 bg-muted rounded">
+                    <div className="h-2 bg-primary rounded" style={{ width: `${Math.round((progress.current / Math.max(progress.total, 1)) * 100)}%` }} />
+                  </div>
+                </div>
+              )}
+              {progress.total > 0 && progress.current >= progress.total && (
+                <div className="flex items-center gap-2 text-xs text-green-700">
+                  <CheckCircle className="h-4 w-4" />
+                  <span>Direct children fully loaded</span>
+                </div>
+              )}
+
+              {/* Ultimate Children Progress */}
+              {deepStatus.inProgress && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <div className="w-3 h-3 border-2 border-gray-300 border-t-blue-600 rounded-full animate-spin"></div>
+                    <span>
+                      Loading ultimate children in background
+                      {typeof deepStatus.total === 'number' ? ` (${Math.min(deepStatus.loaded, deepStatus.total)} / ${deepStatus.total})` : ` (${deepStatus.loaded})`}
+                    </span>
+                  </div>
+                  {typeof deepStatus.total === 'number' && deepStatus.total > 0 && (
+                    <div className="w-full bg-gray-200 rounded-full h-2">
+                      <div 
+                        className="bg-blue-600 h-2 rounded-full transition-all duration-300" 
+                        style={{ width: `${Math.min(100, (deepStatus.loaded / deepStatus.total) * 100)}%` }}
+                      ></div>
+                    </div>
+                  )}
+                </div>
+              )}
+              {!deepStatus.inProgress && deepStatus.loaded > 0 && (
+                <div className="flex items-center gap-2 text-xs text-green-700">
+                  <CheckCircle className="h-4 w-4" />
+                  <span>Ultimate children fully loaded ({deepStatus.loaded} entities)</span>
                 </div>
               )}
             </CardContent>
@@ -618,43 +688,7 @@ export function HierarchyPage() {
                   <div className="text-sm text-muted-foreground">No data loaded</div>
                 )}
               </div>
-              {(progress.total > 0) && (
-                <div className="mt-3">
-                  <div className="text-xs text-muted-foreground mb-1">
-                    {(() => {
-                      const c = Math.min(progress.current, progress.total)
-                      const t = progress.total
-                      const pct = t > 0 ? Math.round((c / t) * 100) : 0
-                      const secs = etaSec ?? null
-                      const fmt = (s: number) => {
-                        const sec = Math.max(0, Math.round(s))
-                        const m = Math.floor(sec / 60)
-                        const r = sec % 60
-                        return `${m}:${String(r).padStart(2, '0')}`
-                      }
-                      const etaText = secs !== null && secs > 0 ? ` • ≈ ${fmt(secs)} remaining` : secs === 0 ? ' • Done' : ''
-                      return `Loading direct children (${c} / ${t}, ${pct}%)${etaText}`
-                    })()}
-                  </div>
-                  <div className="h-2 bg-muted rounded">
-                    <div className="h-2 bg-primary rounded" style={{ width: `${Math.round((progress.current / Math.max(progress.total, 1)) * 100)}%` }} />
-                  </div>
-                  {progress.total > 0 && progress.current >= progress.total && (
-                    <div className="flex items-center gap-2 mt-2 text-xs text-green-700">
-                      <CheckCircle className="h-4 w-4" />
-                      <span>Direct children fully loaded</span>
-                    </div>
-                  )}
-                  {deepStatus.inProgress && (
-                    <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
-                      <span>
-                        Loading descendants in background
-                        {typeof deepStatus.total === 'number' ? ` (${Math.min(deepStatus.loaded, deepStatus.total)} / ${deepStatus.total})` : ` (${deepStatus.loaded})`}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              )}
+
             </CardContent>
           </Card>
         </TabsContent>
