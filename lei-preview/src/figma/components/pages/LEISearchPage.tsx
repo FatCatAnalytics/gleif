@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Tabs,
   TabsContent,
@@ -129,6 +129,31 @@ export function LEISearchPage() {
   const [isSearching, setIsSearching] = useState(false);
   const RECENT_KEY = "lei_recent_searches";
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
+  const abortControllersRef = useRef<Set<AbortController>>(new Set());
+
+  const abortAll = () => {
+    for (const ac of abortControllersRef.current) {
+      try { ac.abort(); } catch {}
+    }
+    abortControllersRef.current.clear();
+  };
+
+  const fetchAbort = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const ac = new AbortController();
+    abortControllersRef.current.add(ac);
+    try {
+      const res = await fetch(input as any, { ...(init || {}), signal: ac.signal });
+      return res;
+    } finally {
+      abortControllersRef.current.delete(ac);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      abortAll();
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -159,7 +184,7 @@ export function LEISearchPage() {
   // Fetch a single LEI record and map to SearchRow (via backend)
   const fetchLeiRecordRow = async (lei: string): Promise<SearchRow | null> => {
     try {
-      const res = await fetch(`${API_BASE}/api/lei/${encodeURIComponent(lei)}`);
+      const res = await fetchAbort(`${API_BASE}/api/lei/${encodeURIComponent(lei)}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = (await res.json()) as SearchRow | null;
       return json;
@@ -188,14 +213,14 @@ export function LEISearchPage() {
           });
         }
       } else {
-        const res = await fetch(`${API_BASE}/api/search?q=${encodeURIComponent(query)}`);
+        const res = await fetchAbort(`${API_BASE}/api/search?q=${encodeURIComponent(query)}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const rows = (await res.json()) as SearchRow[];
         // Fetch ultimate children counts in parallel (best-effort)
         const withCounts = await Promise.all(
           rows.map(async (r) => {
             try {
-              const cRes = await fetch(`${API_BASE}/api/lei/${encodeURIComponent(r.lei)}/direct-children/count`);
+              const cRes = await fetchAbort(`${API_BASE}/api/lei/${encodeURIComponent(r.lei)}/direct-children/count`);
               if (!cRes.ok) throw new Error("bad");
               const count = (await cRes.json()) as number;
               return { ...r, directChildrenCount: count };

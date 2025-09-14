@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table"
@@ -122,6 +122,31 @@ export function EntityMatchPage() {
   const [isProcessing, setIsProcessing] = useState(false)
   const [processingProgress, setProcessingProgress] = useState(0)
   const [activeTab, setActiveTab] = useState("single")
+  const abortControllersRef = useRef<Set<AbortController>>(new Set())
+
+  const abortAll = () => {
+    for (const ac of abortControllersRef.current) {
+      try { ac.abort() } catch {}
+    }
+    abortControllersRef.current.clear()
+  }
+
+  const fetchAbort = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const ac = new AbortController()
+    abortControllersRef.current.add(ac)
+    try {
+      const res = await fetch(input as any, { ...(init || {}), signal: ac.signal })
+      return res
+    } finally {
+      abortControllersRef.current.delete(ac)
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      abortAll()
+    }
+  }, [])
   
   // Define calculateConfidence here using existing normalization functions
   const calculateConfidence = (query: string, targetName: string): number => {
@@ -162,7 +187,7 @@ export function EntityMatchPage() {
       
       try {
         // Search using the LEI API
-        const searchRes = await fetch(`${API_BASE}/api/search?q=${encodeURIComponent(entity)}`)
+        const searchRes = await fetchAbort(`${API_BASE}/api/search?q=${encodeURIComponent(entity)}`)
         let finalMatches: any[] = []
         
         if (searchRes.ok) {
@@ -195,7 +220,7 @@ export function EntityMatchPage() {
             finalMatches = await Promise.all(
               top3Matches.map(async (match) => {
                 try {
-                  const childrenRes = await fetch(`${API_BASE}/api/lei/${encodeURIComponent(match.lei)}/direct-children/count`)
+                  const childrenRes = await fetchAbort(`${API_BASE}/api/lei/${encodeURIComponent(match.lei)}/direct-children/count`)
                   if (childrenRes.ok) {
                     const count = await childrenRes.json()
                     const childrenBonus = Math.min(10, count / 2) // Max 10 bonus
@@ -224,7 +249,7 @@ export function EntityMatchPage() {
         if (finalMatches.length > 0) {
           try {
             const selectedMatch = finalMatches[0]
-            const ultimateParentRes = await fetch(`${API_BASE}/api/lei/${encodeURIComponent(selectedMatch.lei)}/ultimate-parent/row`)
+            const ultimateParentRes = await fetchAbort(`${API_BASE}/api/lei/${encodeURIComponent(selectedMatch.lei)}/ultimate-parent/row`)
             if (ultimateParentRes.ok) {
               const parentData = await ultimateParentRes.json()
               resultEntry.ultimateParent = {
@@ -275,7 +300,7 @@ export function EntityMatchPage() {
     try {
       setIsProcessing(true)
       // Use backend search like LEISearchPage
-      const res = await fetch(`${API_BASE}/api/search?q=${encodeURIComponent(query)}`)
+      const res = await fetchAbort(`${API_BASE}/api/search?q=${encodeURIComponent(query)}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const rows = (await res.json()) as Array<{ lei: string; legalName?: string; jurisdiction?: string; status?: string }>
 
@@ -283,7 +308,7 @@ export function EntityMatchPage() {
       const countsEntries = await Promise.all(
         rows.map(async (r) => {
           try {
-            const cRes = await fetch(`${API_BASE}/api/lei/${encodeURIComponent(r.lei)}/direct-children/count`)
+            const cRes = await fetchAbort(`${API_BASE}/api/lei/${encodeURIComponent(r.lei)}/direct-children/count`)
             if (!cRes.ok) return [r.lei, 0] as const
             const n = await cRes.json()
             return [r.lei, Number(n) || 0] as const
@@ -397,7 +422,7 @@ export function EntityMatchPage() {
     
     // Fetch ultimate parent
     try {
-      const ultimateParentRes = await fetch(`${API_BASE}/api/lei/${encodeURIComponent(selectedMatch.lei)}/ultimate-parent/row`)
+      const ultimateParentRes = await fetchAbort(`${API_BASE}/api/lei/${encodeURIComponent(selectedMatch.lei)}/ultimate-parent/row`)
       if (ultimateParentRes.ok) {
         const parentData = await ultimateParentRes.json()
         result.ultimateParent = {

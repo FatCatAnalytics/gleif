@@ -4,7 +4,7 @@ import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader, SidebarMenu, Sid
 import { Button } from "./ui/button"
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu"
-import { Bell, Settings, LogOut, User, Home, Search, Target, Network, BarChart3, FileText, Sun, Moon } from "lucide-react"
+import { Bell, Settings, LogOut, User, Home, Search, Target, Network, FileText, Sun, Moon } from "lucide-react"
 import FatCatLogo from "../../assets/fatcat-logo.png"
 
 interface AppLayoutProps {
@@ -13,10 +13,9 @@ interface AppLayoutProps {
 
 const navigationItems = [
   { title: "Dashboard", icon: Home, href: "dashboard" },
-  { title: "LEI Search", icon: Search, href: "search" },
+  { title: "Search", icon: Search, href: "search" },
   { title: "Entity Match", icon: Target, href: "entity-match" },
   { title: "Hierarchy", icon: Network, href: "hierarchy" },
-  { title: "Analytics", icon: BarChart3, href: "analytics" },
   { title: "Reports", icon: FileText, href: "reports" },
 ]
 

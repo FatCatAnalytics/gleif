@@ -7,10 +7,10 @@ import time
 import os
 from collections import deque
 from email.utils import parsedate_to_datetime
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Callable, Awaitable
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -287,6 +287,17 @@ async def _gleif_get(
     # Should not reach here
     raise HTTPException(status_code=502, detail="GLEIF upstream not available")
 
+async def _maybe_cancel(cancel_check: Optional[Callable[[], Awaitable[bool]]]) -> None:
+    if cancel_check is None:
+        return
+    if await cancel_check():
+        raise HTTPException(status_code=499, detail="Client closed request")
+
+def _make_cancel_check(request: Request) -> Callable[[], Awaitable[bool]]:
+    async def _check() -> bool:
+        return await request.is_disconnected()
+    return _check
+
 
 async def _fetch_lei(client: httpx.AsyncClient, lei: str) -> Optional[Row]:
     cache_key = f"{CACHE_VERSION}:lei:{lei}"
@@ -352,10 +363,15 @@ async def _fetch_ultimate_parent(client: httpx.AsyncClient, lei: str) -> Optiona
     return data.get("id") or (data.get("attributes") or {}).get("lei")
 
 
-async def _fetch_direct_children(client: httpx.AsyncClient, lei: str) -> List[str]:
+async def _fetch_direct_children(
+    client: httpx.AsyncClient,
+    lei: str,
+    cancel_check: Optional[Callable[[], Awaitable[bool]]] = None,
+) -> List[str]:
     url = f"https://api.gleif.org/api/v1/lei-records/{lei}/direct-children?page[size]=200"
     leis: List[str] = []
     for _ in range(10):  # safety cap
+        await _maybe_cancel(cancel_check)
         r = await _gleif_get(client, url, timeout=30)
         if r.status_code == 404:
             break
@@ -372,7 +388,11 @@ async def _fetch_direct_children(client: httpx.AsyncClient, lei: str) -> List[st
         url = next_url
     return leis
 
-async def _fetch_direct_children_rows(client: httpx.AsyncClient, lei: str) -> List[Row]:
+async def _fetch_direct_children_rows(
+    client: httpx.AsyncClient,
+    lei: str,
+    cancel_check: Optional[Callable[[], Awaitable[bool]]] = None,
+) -> List[Row]:
     cache_key = f"{CACHE_VERSION}:children_rows:{lei}"
     cached = lei_cache.get(cache_key)
     if cached is not None:
@@ -380,6 +400,7 @@ async def _fetch_direct_children_rows(client: httpx.AsyncClient, lei: str) -> Li
     url = f"https://api.gleif.org/api/v1/lei-records/{lei}/direct-children?page[size]=200"
     rows: List[Row] = []
     for _ in range(10):  # safety cap
+        await _maybe_cancel(cancel_check)
         r = await _gleif_get(client, url, timeout=30)
         if r.status_code == 404:
             break
@@ -402,14 +423,19 @@ async def _fetch_direct_children_rows(client: httpx.AsyncClient, lei: str) -> Li
         url = next_url
     lei_cache.set(cache_key, rows)
     return rows
-async def _compute_hierarchy_shape(client: httpx.AsyncClient, root_lei: str, max_nodes: int = 20000) -> HierarchyShape:
+async def _compute_hierarchy_shape(
+    client: httpx.AsyncClient,
+    root_lei: str,
+    max_nodes: int = 20000,
+    cancel_check: Optional[Callable[[], Awaitable[bool]]] = None,
+) -> HierarchyShape:
     cache_key = f"{CACHE_VERSION}:shape:v2:{root_lei}:{max_nodes}"
     cached = lei_cache.get(cache_key)
     if cached is not None:
         return cached
 
     # Get direct children of root once for accuracy
-    root_children = await _fetch_direct_children(client, root_lei)
+    root_children = await _fetch_direct_children(client, root_lei, cancel_check)
 
     # BFS over relationship graph using only LEI IDs to estimate max depth and visited count
     visited: set[str] = set([root_lei])
@@ -420,11 +446,13 @@ async def _compute_hierarchy_shape(client: httpx.AsyncClient, root_lei: str, max
     async def fetch_ids(lei: str) -> List[str]:
         async with semaphore:
             try:
-                return await _fetch_direct_children(client, lei)
+                await _maybe_cancel(cancel_check)
+                return await _fetch_direct_children(client, lei, cancel_check)
             except (httpx.HTTPError, ValueError):
                 return []
 
     while frontier and len(visited) < max_nodes:
+        await _maybe_cancel(cancel_check)
         depth += 1
         next_level: List[str] = []
         results = await asyncio.gather(*[fetch_ids(x) for x in frontier], return_exceptions=False)
@@ -440,7 +468,7 @@ async def _compute_hierarchy_shape(client: httpx.AsyncClient, root_lei: str, max
         frontier = next_level
 
     # Use authoritative ultimate-children count
-    ultimate_cnt = await _fetch_ultimate_children_count(client, root_lei)
+    ultimate_cnt = await _fetch_ultimate_children_count(client, root_lei, cancel_check)
     shape = HierarchyShape(
         maxDepth=depth,
         directChildrenCount=len(root_children),
@@ -453,17 +481,22 @@ async def _compute_hierarchy_shape(client: httpx.AsyncClient, root_lei: str, max
 
 
 
-async def _build_hierarchy(client: httpx.AsyncClient, root_lei: str) -> Optional[HierarchyNode]:
+async def _build_hierarchy(
+    client: httpx.AsyncClient,
+    root_lei: str,
+    cancel_check: Optional[Callable[[], Awaitable[bool]]] = None,
+) -> Optional[HierarchyNode]:
     visited: Set[str] = set()
 
     async def build(lei: str) -> Optional[HierarchyNode]:
+        await _maybe_cancel(cancel_check)
         if lei in visited:
             return None
         visited.add(lei)
         row = await _fetch_lei(client, lei)
         if not row:
             return None
-        child_leis = await _fetch_direct_children(client, lei)
+        child_leis = await _fetch_direct_children(client, lei, cancel_check)
         children_nodes_raw = await asyncio.gather(*[build(c) for c in child_leis])
         children_nodes = [c for c in children_nodes_raw if c]
         return HierarchyNode(entity=row, children=children_nodes)
@@ -471,7 +504,11 @@ async def _build_hierarchy(client: httpx.AsyncClient, root_lei: str) -> Optional
     return await build(root_lei)
 
 
-async def _fetch_ultimate_children_count(client: httpx.AsyncClient, lei: str) -> int:
+async def _fetch_ultimate_children_count(
+    client: httpx.AsyncClient,
+    lei: str,
+    cancel_check: Optional[Callable[[], Awaitable[bool]]] = None,
+) -> int:
     cache_key = f"{CACHE_VERSION}:ultimate_children_count:{lei}"
     cached = lei_cache.get(cache_key)
     if cached is not None:
@@ -479,6 +516,7 @@ async def _fetch_ultimate_children_count(client: httpx.AsyncClient, lei: str) ->
     url = f"https://api.gleif.org/api/v1/lei-records/{lei}/ultimate-children?page[size]=200"
     total = 0
     for _ in range(50):  # safety cap
+        await _maybe_cancel(cancel_check)
         r = await _gleif_get(client, url, timeout=30)
         if r.status_code == 404:
             break
@@ -493,7 +531,11 @@ async def _fetch_ultimate_children_count(client: httpx.AsyncClient, lei: str) ->
     lei_cache.set(cache_key, total)
     return total
 
-async def _fetch_direct_children_count(client: httpx.AsyncClient, lei: str) -> int:
+async def _fetch_direct_children_count(
+    client: httpx.AsyncClient,
+    lei: str,
+    cancel_check: Optional[Callable[[], Awaitable[bool]]] = None,
+) -> int:
     cache_key = f"{CACHE_VERSION}:direct_children_count:{lei}"
     cached = lei_cache.get(cache_key)
     if cached is not None:
@@ -501,6 +543,7 @@ async def _fetch_direct_children_count(client: httpx.AsyncClient, lei: str) -> i
     url = f"https://api.gleif.org/api/v1/lei-records/{lei}/direct-children?page[size]=200"
     total = 0
     for _ in range(50):  # safety cap
+        await _maybe_cancel(cancel_check)
         r = await _gleif_get(client, url, timeout=30)
         if r.status_code == 404:
             break
@@ -575,14 +618,15 @@ async def lei_details(lei: str):
 
 
 @app.get("/api/lei/{lei}/hierarchy", response_model=Optional[HierarchyNode])
-async def lei_hierarchy(lei: str):
+async def lei_hierarchy(lei: str, request: Request):
     if not LEI_PATTERN.match(lei):
         raise HTTPException(status_code=400, detail="Invalid LEI format")
     async with httpx.AsyncClient() as client:
         # find ultimate parent (if 404, the entity itself is ultimate parent)
         ultimate = await _fetch_ultimate_parent(client, lei)
         root_lei = ultimate or lei
-        tree = await _build_hierarchy(client, root_lei)
+        cancel_check = _make_cancel_check(request)
+        tree = await _build_hierarchy(client, root_lei, cancel_check)
         return tree
 
 @app.get("/api/lei/{lei}/ultimate-parent/row", response_model=Optional[Row])
@@ -596,45 +640,50 @@ async def lei_ultimate_parent_row(lei: str):
         return row
 
 @app.get("/api/lei/{lei}/children", response_model=List[Row])
-async def lei_direct_children(lei: str):
+async def lei_direct_children(lei: str, request: Request):
     if not LEI_PATTERN.match(lei):
         raise HTTPException(status_code=400, detail="Invalid LEI format")
     async with httpx.AsyncClient() as client:
         # Fast-path: use attributes from direct-children pages to avoid per-child record calls
-        rows = await _fetch_direct_children_rows(client, lei)
+        cancel_check = _make_cancel_check(request)
+        rows = await _fetch_direct_children_rows(client, lei, cancel_check)
         return rows
 
 @app.get("/api/lei/{lei}/direct-children/leis", response_model=List[str])
-async def lei_direct_children_leis(lei: str):
+async def lei_direct_children_leis(lei: str, request: Request):
     if not LEI_PATTERN.match(lei):
         raise HTTPException(status_code=400, detail="Invalid LEI format")
     async with httpx.AsyncClient() as client:
-        child_leis = await _fetch_direct_children(client, lei)
+        cancel_check = _make_cancel_check(request)
+        child_leis = await _fetch_direct_children(client, lei, cancel_check)
         return child_leis
 
 @app.get("/api/lei/{lei}/hierarchy/shape", response_model=HierarchyShape)
-async def lei_hierarchy_shape(lei: str):
+async def lei_hierarchy_shape(lei: str, request: Request):
     if not LEI_PATTERN.match(lei):
         raise HTTPException(status_code=400, detail="Invalid LEI format")
     async with httpx.AsyncClient() as client:
         ultimate = await _fetch_ultimate_parent(client, lei)
         root_lei = ultimate or lei
-        shape = await _compute_hierarchy_shape(client, root_lei)
+        cancel_check = _make_cancel_check(request)
+        shape = await _compute_hierarchy_shape(client, root_lei, cancel_check=cancel_check)
         return shape
 
 @app.get("/api/lei/{lei}/ultimate-children/count", response_model=int)
-async def lei_ultimate_children_count(lei: str):
+async def lei_ultimate_children_count(lei: str, request: Request):
     if not LEI_PATTERN.match(lei):
         raise HTTPException(status_code=400, detail="Invalid LEI format")
     async with httpx.AsyncClient() as client:
-        count = await _fetch_ultimate_children_count(client, lei)
+        cancel_check = _make_cancel_check(request)
+        count = await _fetch_ultimate_children_count(client, lei, cancel_check)
         return count
 
 @app.get("/api/lei/{lei}/direct-children/count", response_model=int)
-async def lei_direct_children_count(lei: str):
+async def lei_direct_children_count(lei: str, request: Request):
     if not LEI_PATTERN.match(lei):
         raise HTTPException(status_code=400, detail="Invalid LEI format")
     async with httpx.AsyncClient() as client:
-        count = await _fetch_direct_children_count(client, lei)
+        cancel_check = _make_cancel_check(request)
+        count = await _fetch_direct_children_count(client, lei, cancel_check)
         return count
 

@@ -4,7 +4,6 @@ import { DashboardPage } from "./components/pages/DashboardPage"
 import { LEISearchPage } from "./components/pages/LEISearchPage"
 import { EntityMatchPage } from "./components/pages/EntityMatchPage"
 import { HierarchyPage } from "./components/pages/HierarchyPage"
-import { AnalyticsPage } from "./components/pages/AnalyticsPage"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./components/ui/card"
 import { Button } from "./components/ui/button"
@@ -195,8 +194,7 @@ export default function App() {
         return <EntityMatchPage />
       case "hierarchy":
         return <HierarchyPage />
-      case "analytics":
-        return <AnalyticsPage />
+      // analytics removed
       case "reports":
         return <ReportsPage />
       default:

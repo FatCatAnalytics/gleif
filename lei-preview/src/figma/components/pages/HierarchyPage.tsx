@@ -44,11 +44,21 @@ export function HierarchyPage() {
   const [childCounts, setChildCounts] = useState<Record<string, number>>({})
   const deepRunIdRef = useRef(0)
   const [deepStatus, setDeepStatus] = useState<{ loaded: number; total: number | null; inProgress: boolean }>({ loaded: 0, total: null, inProgress: false })
+  const abortControllersRef = useRef<Set<AbortController>>(new Set())
+
+  const abortAll = () => {
+    for (const ac of abortControllersRef.current) {
+      try { ac.abort() } catch {}
+    }
+    abortControllersRef.current.clear()
+  }
 
   useEffect(() => {
     const loadWorld = async () => {
       try {
-        const res = await fetch("https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json")
+        const ac = new AbortController()
+        abortControllersRef.current.add(ac)
+        const res = await fetch("https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json", { signal: ac.signal })
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const topo = await res.json()
         const geo = feature(topo, topo.objects.countries) as any
@@ -56,9 +66,17 @@ export function HierarchyPage() {
       } catch (e) {
         console.warn("Failed to load world map; continuing without country outlines", e)
         setCountryFeatures([])
+      } finally {
+        // best-effort cleanup: clear any settled controllers
+        for (const ac of Array.from(abortControllersRef.current)) {
+          if (ac.signal.aborted) abortControllersRef.current.delete(ac)
+        }
       }
     }
     loadWorld()
+    return () => {
+      abortAll()
+    }
   }, [])
 
   // Initialize on mount: prefer session handoff; otherwise load default
@@ -97,7 +115,14 @@ export function HierarchyPage() {
   }
 
   const fetchChildren = async (lei: string): Promise<LazyNode[]> => {
-    const res = await fetch(`${API_BASE}/api/lei/${encodeURIComponent(lei)}/children`)
+    const ac = new AbortController()
+    abortControllersRef.current.add(ac)
+    let res: Response
+    try {
+      res = await fetch(`${API_BASE}/api/lei/${encodeURIComponent(lei)}/children`, { signal: ac.signal })
+    } finally {
+      abortControllersRef.current.delete(ac)
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const rows = (await res.json()) as Row[]
     return rows.map((r) => ({ entity: r, hasFetched: false, children: [] }))
@@ -183,7 +208,10 @@ export function HierarchyPage() {
     setProgress({ current: 0, total: 0 })
     try {
       // Load only ultimate parent row for lazy root
-      const res = await fetch(`${API_BASE}/api/lei/${encodeURIComponent(q)}/ultimate-parent/row`)
+      const ac1 = new AbortController()
+      abortControllersRef.current.add(ac1)
+      const res = await fetch(`${API_BASE}/api/lei/${encodeURIComponent(q)}/ultimate-parent/row`, { signal: ac1.signal })
+      abortControllersRef.current.delete(ac1)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const rootRow = (await res.json()) as Row | null
       const rootNode: LazyNode | null = rootRow ? { entity: rootRow, hasFetched: false, children: [] } : null
@@ -196,7 +224,10 @@ export function HierarchyPage() {
       let expectedTotal: number | null = null
       if (rootRow?.lei) {
         try {
-          const cntRes = await fetch(`${API_BASE}/api/lei/${encodeURIComponent(rootRow.lei)}/direct-children/count`)
+          const ac2 = new AbortController()
+          abortControllersRef.current.add(ac2)
+          const cntRes = await fetch(`${API_BASE}/api/lei/${encodeURIComponent(rootRow.lei)}/direct-children/count`, { signal: ac2.signal })
+          abortControllersRef.current.delete(ac2)
           if (cntRes.ok) {
             const cnt = await cntRes.json()
             const total = Number(cnt) || 0
@@ -208,7 +239,10 @@ export function HierarchyPage() {
 
       // Fetch first-level (direct) children in one request and attach immediately
       if (rootRow) {
-        const rowsRes = await fetch(`${API_BASE}/api/lei/${encodeURIComponent(rootRow.lei)}/children`)
+        const ac3 = new AbortController()
+        abortControllersRef.current.add(ac3)
+        const rowsRes = await fetch(`${API_BASE}/api/lei/${encodeURIComponent(rootRow.lei)}/children`, { signal: ac3.signal })
+        abortControllersRef.current.delete(ac3)
         if (rowsRes.ok) {
           const rows = (await rowsRes.json()) as Row[]
           setTree({
@@ -251,6 +285,8 @@ export function HierarchyPage() {
     const unfetched = visibleNodeIds.filter((id) => !(id in childCounts))
     if (unfetched.length === 0) return
     let cancelled = false
+    const ac = new AbortController()
+    abortControllersRef.current.add(ac)
     const limit = 6
     const run = async () => {
       for (let i = 0; i < unfetched.length; i += limit) {
@@ -258,7 +294,7 @@ export function HierarchyPage() {
         const results = await Promise.all(
           slice.map(async (id) => {
             try {
-              const res = await fetch(`${API_BASE}/api/lei/${encodeURIComponent(id)}/direct-children/count`)
+              const res = await fetch(`${API_BASE}/api/lei/${encodeURIComponent(id)}/direct-children/count`, { signal: ac.signal })
               if (!res.ok) return [id, 0] as const
               const n = await res.json()
               return [id, Number(n) || 0] as const
@@ -279,6 +315,8 @@ export function HierarchyPage() {
     run()
     return () => {
       cancelled = true
+      abortControllersRef.current.delete(ac)
+      try { ac.abort() } catch {}
     }
   }, [visibleNodeIds, API_BASE, childCounts])
 
@@ -339,7 +377,9 @@ export function HierarchyPage() {
       const lei = tree?.entity?.lei
       if (!lei) return
       try {
-        const res = await fetch(`${API_BASE}/api/lei/${encodeURIComponent(lei)}/hierarchy/shape`)
+        const ac = new AbortController()
+        abortControllersRef.current.add(ac)
+        const res = await fetch(`${API_BASE}/api/lei/${encodeURIComponent(lei)}/hierarchy/shape`, { signal: ac.signal })
         if (!res.ok) return
         const json = await res.json()
         setShape(json)
