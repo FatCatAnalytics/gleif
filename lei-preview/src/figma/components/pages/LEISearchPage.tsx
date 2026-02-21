@@ -301,41 +301,59 @@ export function LEISearchPage() {
   };
 
   return (
-    <div className="p-6 space-y-6">
-      <div>
-        <h1>FatCat LEI Search</h1>
-        <p className="text-muted-foreground">
-          Search for Legal Entity Identifiers by LEI code,
-          entity name, or other criteria with FatCat's intelligent search.
-        </p>
+    <div className="p-6 lg:p-8 space-y-8">
+      {/* Hero Section */}
+      <div className="relative">
+        <div className="absolute -top-4 -right-4 h-40 w-40 rounded-full bg-accent/5 blur-3xl" />
+        <div className="relative">
+          <div className="flex items-center gap-2 text-primary mb-2">
+            <Search className="h-4 w-4" />
+            <span className="text-xs font-medium uppercase tracking-widest">Entity Search</span>
+          </div>
+          <h1 className="text-3xl lg:text-4xl font-bold tracking-tight gold-accent-line" style={{ fontFamily: 'var(--font-display)' }}>
+            FatCat LEI Search
+          </h1>
+          <p className="mt-3 text-muted-foreground max-w-2xl">
+            Search for Legal Entity Identifiers by LEI code, entity name, or other criteria with FatCat's intelligent search engine.
+          </p>
+        </div>
       </div>
 
-      <Tabs defaultValue="search" className="space-y-4">
-        <TabsList>
-          <TabsTrigger value="search">Search</TabsTrigger>
-          <TabsTrigger value="advanced">
+      <Tabs defaultValue="search" className="space-y-6">
+        <TabsList className="bg-muted/30 p-1 rounded-xl">
+          <TabsTrigger value="search" className="rounded-lg data-[state=active]:bg-background data-[state=active]:shadow-sm px-4">
+            Search
+          </TabsTrigger>
+          <TabsTrigger value="advanced" className="rounded-lg data-[state=active]:bg-background data-[state=active]:shadow-sm px-4">
             Advanced Search
           </TabsTrigger>
-          <TabsTrigger value="batch">Batch Search</TabsTrigger>
-          <TabsTrigger value="api">API Access</TabsTrigger>
+          <TabsTrigger value="batch" className="rounded-lg data-[state=active]:bg-background data-[state=active]:shadow-sm px-4">
+            Batch Search
+          </TabsTrigger>
+          <TabsTrigger value="api" className="rounded-lg data-[state=active]:bg-background data-[state=active]:shadow-sm px-4">
+            API Access
+          </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="search" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Quick Search</CardTitle>
+        <TabsContent value="search" className="space-y-6">
+          {/* Search Card */}
+          <Card className="card-hover-lift overflow-hidden">
+            <div className="absolute inset-0 bg-gradient-to-br from-primary/[0.02] via-transparent to-accent/[0.02]" />
+            <CardHeader className="relative pb-2">
+              <CardTitle className="flex items-center gap-2" style={{ fontFamily: 'var(--font-display)' }}>
+                Quick Search
+              </CardTitle>
               <CardDescription>
-                Search by LEI code, entity name, or registration
-                number
+                Search by LEI code, entity name, or registration number
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex gap-2">
+            <CardContent className="relative space-y-4">
+              <div className="flex gap-3">
                 <div className="relative flex-1">
-                  <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
                     placeholder="Enter LEI code, entity name, or search term..."
-                    className="pl-8"
+                    className="pl-10 h-11 rounded-lg border-border/50 bg-background focus:ring-2 focus:ring-primary/20 focus:border-primary"
                     value={searchQuery}
                     onChange={(e) =>
                       setSearchQuery(e.target.value)
@@ -346,35 +364,41 @@ export function LEISearchPage() {
                   />
                 </div>
                 <Select>
-                  <SelectTrigger className="w-40">
+                  <SelectTrigger className="w-40 h-11 rounded-lg border-border/50">
                     <SelectValue placeholder="Search Type" />
                   </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">
-                      All Fields
-                    </SelectItem>
-                    <SelectItem value="lei">
-                      LEI Code
-                    </SelectItem>
-                    <SelectItem value="name">
-                      Entity Name
-                    </SelectItem>
-                    <SelectItem value="jurisdiction">
-                      Jurisdiction
-                    </SelectItem>
+                  <SelectContent className="rounded-xl">
+                    <SelectItem value="all">All Fields</SelectItem>
+                    <SelectItem value="lei">LEI Code</SelectItem>
+                    <SelectItem value="name">Entity Name</SelectItem>
+                    <SelectItem value="jurisdiction">Jurisdiction</SelectItem>
                   </SelectContent>
                 </Select>
-                <Button onClick={() => handleSearch()} disabled={isSearching}>
-                  <Search className="h-4 w-4 mr-2" />
-                  {isSearching ? "Searching..." : "Search"}
+                <Button
+                  onClick={() => handleSearch()}
+                  disabled={isSearching}
+                  className="h-11 px-6 rounded-lg bg-primary hover:bg-primary/90 shadow-sm"
+                >
+                  {isSearching ? (
+                    <>
+                      <div className="h-4 w-4 mr-2 animate-spin rounded-full border-2 border-primary-foreground/30 border-t-primary-foreground" />
+                      Searching...
+                    </>
+                  ) : (
+                    <>
+                      <Search className="h-4 w-4 mr-2" />
+                      Search
+                    </>
+                  )}
                 </Button>
               </div>
 
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-muted-foreground">
-                  Recent searches:
-                </span>
-                {recentSearches.map((search, index) => (
+              {recentSearches.length > 0 && (
+                <div className="flex items-center gap-2 pt-2">
+                  <span className="text-xs text-muted-foreground">
+                    Recent:
+                  </span>
+                  {recentSearches.map((search, index) => (
                     <Button
                       key={index}
                       variant="outline"
@@ -383,162 +407,189 @@ export function LEISearchPage() {
                         setSearchQuery(search);
                         performSearch(search);
                       }}
-                      className="text-xs"
+                      className="text-xs h-7 rounded-full bg-muted/30 border-border/50 hover:bg-primary/10 hover:text-primary hover:border-primary/30 transition-colors"
                     >
                       {search}
                     </Button>
                   ))}
-              </div>
+                </div>
+              )}
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader>
+          {/* Results Card */}
+          <Card className="card-hover-lift">
+            <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <div>
-                  <CardTitle>Search Results</CardTitle>
-                  <CardDescription>
-                    Found {searchResults.length.toLocaleString()} results
+                  <CardTitle className="flex items-center gap-3" style={{ fontFamily: 'var(--font-display)' }}>
+                    Search Results
+                    {searchResults.length > 0 && (
+                      <Badge variant="secondary" className="text-xs font-normal">
+                        {searchResults.length.toLocaleString()} found
+                      </Badge>
+                    )}
+                  </CardTitle>
+                  <CardDescription className="mt-1">
+                    Click on any result to explore entity details
                   </CardDescription>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Button variant="outline" size="sm">
+                  <Button variant="outline" size="sm" className="rounded-lg border-border/50 hover:bg-muted/50">
                     <Filter className="h-4 w-4 mr-2" />
                     Filter
                   </Button>
-                  <Button variant="outline" size="sm">
+                  <Button variant="outline" size="sm" className="rounded-lg border-border/50 hover:bg-muted/50">
                     <Download className="h-4 w-4 mr-2" />
                     Export
                   </Button>
                 </div>
               </div>
             </CardHeader>
-            <CardContent className="overflow-visible">
+            <CardContent className="overflow-visible p-0">
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
-                    <TableRow>
-                      <TableHead>LEI Code</TableHead>
-                      <TableHead>Legal Name</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Jurisdiction</TableHead>
-                      <TableHead>S&P Global</TableHead>
-                      <TableHead>Last Update</TableHead>
-                      <TableHead>Direct Children</TableHead>
-                      <TableHead className="text-right">
-                        Actions
-                      </TableHead>
+                    <TableRow className="bg-muted/30 hover:bg-muted/30">
+                      <TableHead className="font-semibold">LEI Code</TableHead>
+                      <TableHead className="font-semibold">Legal Name</TableHead>
+                      <TableHead className="font-semibold">Status</TableHead>
+                      <TableHead className="font-semibold">Jurisdiction</TableHead>
+                      <TableHead className="font-semibold">S&P Global</TableHead>
+                      <TableHead className="font-semibold">Last Update</TableHead>
+                      <TableHead className="font-semibold">Direct Children</TableHead>
+                      <TableHead className="text-right font-semibold">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {searchResults.map((result) => (
-                      <TableRow key={result.lei}>
-                        <TableCell>
-                          <div className="font-mono text-sm">
-                            {result.lei}
+                    {searchResults.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={8} className="h-32 text-center">
+                          <div className="flex flex-col items-center gap-2 text-muted-foreground">
+                            <Search className="h-8 w-8 text-muted-foreground/50" />
+                            <p>No results yet. Enter a search term above.</p>
                           </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="font-medium">
-                            {result.legalName}
-                          </div>
-                          <div className="text-sm text-muted-foreground truncate max-w-xs">
-                            {result.address}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge
-                            variant={
-                              result.status === "Active"
-                                ? "default"
-                                : "secondary"
-                            }
-                          >
-                            {result.status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          {result.jurisdiction}
-                        </TableCell>
-                        <TableCell>
-                          {Array.isArray(result.spglobal) && result.spglobal.length > 0
-                            ? result.spglobal.join(", ")
-                            : ""}
-                        </TableCell>
-                        <TableCell>{result.lastUpdate}</TableCell>
-                        <TableCell>{
-                          typeof result.directChildrenCount === 'number'
-                            ? result.directChildrenCount.toLocaleString()
-                            : '—'
-                        }</TableCell>
-                        <TableCell className="text-right">
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button variant="ghost" size="sm">
-                                <MoreHorizontal className="h-4 w-4" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent
-                              align="end"
-                              className="w-48 z-50 bg-white border border-border rounded-md shadow-lg p-1"
-                              style={{ zIndex: 9999 }}
-                            >
-                              <DropdownMenuItem
-                                onClick={() =>
-                                  handleViewDetails(result)
-                                }
-                              >
-                                <Eye className="h-4 w-4 mr-2" />
-                                View Company Details
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                onClick={() => {
-                                  // Robust handoff: set storage first, navigate, then re-emit after mount tick
-                                  try {
-                                    sessionStorage.setItem('hierarchyLEI', result.lei)
-                                  } catch {}
-                                  window.dispatchEvent(new CustomEvent('navigate', { 
-                                    detail: { 
-                                      page: 'hierarchy'
-                                    } 
-                                  }));
-                                  setTimeout(() => {
-                                    try {
-                                      window.dispatchEvent(new CustomEvent('hierarchy:set-lei', { detail: { lei: result.lei } }))
-                                    } catch {}
-                                  }, 0)
-                                }}
-                              >
-                                <Network className="h-4 w-4 mr-2" />
-                                View Hierarchy
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                onClick={() =>
-                                  handleAddToDatabase(result)
-                                }
-                                disabled={savedEntities.has(
-                                  result.lei,
-                                )}
-                              >
-                                {savedEntities.has(
-                                  result.lei,
-                                ) ? (
-                                  <>
-                                    <CheckCircle className="h-4 w-4 mr-2" />
-                                    Added to Database
-                                  </>
-                                ) : (
-                                  <>
-                                    <Database className="h-4 w-4 mr-2" />
-                                    Add to Database
-                                  </>
-                                )}
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
                         </TableCell>
                       </TableRow>
-                    ))}
+                    ) : (
+                      searchResults.map((result) => (
+                        <TableRow
+                          key={result.lei}
+                          className="group table-row-hover cursor-pointer"
+                          onClick={() => handleViewDetails(result)}
+                        >
+                          <TableCell>
+                            <div className="font-mono text-xs bg-muted/50 px-2 py-1 rounded inline-block group-hover:bg-primary/10 group-hover:text-primary transition-colors">
+                              {result.lei}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="font-medium group-hover:text-primary transition-colors">
+                              {result.legalName}
+                            </div>
+                            <div className="text-xs text-muted-foreground truncate max-w-xs mt-0.5">
+                              {result.address}
+                            </div>
+                          </TableCell>
+                          <TableCell onClick={(e) => e.stopPropagation()}>
+                            <Badge
+                              variant="outline"
+                              className={`text-[10px] font-medium ${
+                                result.status === "Active"
+                                  ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20"
+                                  : result.status === "Lapsed"
+                                  ? "bg-amber-500/10 text-amber-600 border-amber-500/20"
+                                  : "bg-muted/50"
+                              }`}
+                            >
+                              {result.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <span className="text-sm">{result.jurisdiction}</span>
+                          </TableCell>
+                          <TableCell>
+                            <span className="text-sm text-muted-foreground">
+                              {Array.isArray(result.spglobal) && result.spglobal.length > 0
+                                ? result.spglobal.join(", ")
+                                : "—"}
+                            </span>
+                          </TableCell>
+                          <TableCell>
+                            <span className="text-xs text-muted-foreground tabular-nums">{result.lastUpdate}</span>
+                          </TableCell>
+                          <TableCell>
+                            <span className="text-sm tabular-nums font-medium">
+                              {typeof result.directChildrenCount === 'number'
+                                ? result.directChildrenCount.toLocaleString()
+                                : '—'}
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-8 w-8 p-0 rounded-lg hover:bg-primary/10 hover:text-primary"
+                                >
+                                  <MoreHorizontal className="h-4 w-4" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent
+                                align="end"
+                                className="w-52 rounded-xl shadow-lg border-border/50"
+                                style={{ zIndex: 9999 }}
+                              >
+                                <DropdownMenuItem
+                                  onClick={() => handleViewDetails(result)}
+                                  className="py-2.5 cursor-pointer"
+                                >
+                                  <Eye className="h-4 w-4 mr-2" />
+                                  View Company Details
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() => {
+                                    try {
+                                      sessionStorage.setItem('hierarchyLEI', result.lei)
+                                    } catch {}
+                                    window.dispatchEvent(new CustomEvent('navigate', {
+                                      detail: { page: 'hierarchy' }
+                                    }));
+                                    setTimeout(() => {
+                                      try {
+                                        window.dispatchEvent(new CustomEvent('hierarchy:set-lei', { detail: { lei: result.lei } }))
+                                      } catch {}
+                                    }, 0)
+                                  }}
+                                  className="py-2.5 cursor-pointer"
+                                >
+                                  <Network className="h-4 w-4 mr-2" />
+                                  View Hierarchy
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() => handleAddToDatabase(result)}
+                                  disabled={savedEntities.has(result.lei)}
+                                  className="py-2.5 cursor-pointer"
+                                >
+                                  {savedEntities.has(result.lei) ? (
+                                    <>
+                                      <CheckCircle className="h-4 w-4 mr-2 text-emerald-500" />
+                                      <span className="text-emerald-600">Added to Database</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Database className="h-4 w-4 mr-2" />
+                                      Add to Database
+                                    </>
+                                  )}
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
                   </TableBody>
                 </Table>
               </div>

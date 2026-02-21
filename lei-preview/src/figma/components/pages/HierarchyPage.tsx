@@ -321,6 +321,7 @@ export function HierarchyPage() {
   }, [visibleNodeIds, API_BASE, childCounts])
 
   // Start background deep loading when direct children are loaded
+  // Uses the fast /hierarchy/flat endpoint that returns all descendants in one request
   useEffect(() => {
     if (!tree?.hasFetched || !tree.children?.length) return
     
@@ -331,37 +332,72 @@ export function HierarchyPage() {
     setDeepStatus({ loaded: tree.children?.length || 0, total: null, inProgress: true })
 
     const deepLoadAllDescendants = async () => {
-      const queue: LazyNode[] = [...(tree.children || [])]
-      let totalLoaded = tree.children?.length || 0
+      const rootLei = tree.entity.lei
+      try {
+        const ac = new AbortController()
+        abortControllersRef.current.add(ac)
+        const res = await fetch(
+          `${API_BASE}/api/lei/${encodeURIComponent(rootLei)}/hierarchy/flat`,
+          { signal: ac.signal }
+        )
+        abortControllersRef.current.delete(ac)
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const flatNodes = (await res.json()) as { parentLei: string | null; entity: Row }[]
 
-      while (queue.length > 0 && !cancelled && deepRunIdRef.current === runId) {
-        const node = queue.shift()!
-        
-        if (!node.hasFetched) {
-          try {
-            const kids = await fetchChildren(node.entity.lei)
-            node.children = kids
-            node.hasFetched = true
-            
-            // Add children to queue for next level
-            queue.push(...kids)
-            totalLoaded += kids.length
-            
-            // Update tree and progress
-            setTree(prev => prev ? { ...prev } : prev)
-            setDeepStatus(s => ({ ...s, loaded: totalLoaded }))
-            
-          } catch (err) {
-            console.warn('Failed to fetch children for', node.entity.lei, err)
+        if (cancelled || deepRunIdRef.current !== runId) return
+
+        // Build a parentLei -> children map
+        const childrenMap = new Map<string, Row[]>()
+        for (const fn of flatNodes) {
+          if (fn.parentLei) {
+            const arr = childrenMap.get(fn.parentLei) || []
+            arr.push(fn.entity)
+            childrenMap.set(fn.parentLei, arr)
           }
         }
-        
-        // Yield to keep UI responsive
-        await new Promise(resolve => setTimeout(resolve, 10))
-      }
-      
-      if (!cancelled && deepRunIdRef.current === runId) {
-        setDeepStatus(s => ({ ...s, inProgress: false }))
+
+        // Reconstruct tree recursively from the flat list
+        const buildLazy = (row: Row): LazyNode => {
+          const kids = childrenMap.get(row.lei) || []
+          return {
+            entity: row,
+            hasFetched: true,
+            children: kids.map(buildLazy),
+          }
+        }
+
+        const rootFn = flatNodes.find((fn) => fn.parentLei === null)
+        if (rootFn) {
+          const fullTree = buildLazy(rootFn.entity)
+          setTree(fullTree)
+          setDeepStatus({ loaded: flatNodes.length - 1, total: flatNodes.length - 1, inProgress: false })
+        }
+      } catch (err) {
+        if (cancelled || deepRunIdRef.current !== runId) return
+        console.warn('Flat hierarchy load failed, falling back to sequential loading', err)
+        // Fallback: sequential loading like before
+        const queue: LazyNode[] = [...(tree.children || [])]
+        let totalLoaded = tree.children?.length || 0
+        while (queue.length > 0 && !cancelled && deepRunIdRef.current === runId) {
+          const node = queue.shift()!
+          if (!node.hasFetched) {
+            try {
+              const kids = await fetchChildren(node.entity.lei)
+              node.children = kids
+              node.hasFetched = true
+              queue.push(...kids)
+              totalLoaded += kids.length
+              setTree(prev => prev ? { ...prev } : prev)
+              setDeepStatus(s => ({ ...s, loaded: totalLoaded }))
+            } catch (err2) {
+              console.warn('Failed to fetch children for', node.entity.lei, err2)
+            }
+          }
+          await new Promise(resolve => setTimeout(resolve, 10))
+        }
+        if (!cancelled && deepRunIdRef.current === runId) {
+          setDeepStatus(s => ({ ...s, inProgress: false }))
+        }
       }
     }
 

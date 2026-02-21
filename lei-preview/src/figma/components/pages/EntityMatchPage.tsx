@@ -6,8 +6,6 @@ import { Badge } from "../ui/badge"
 import { Button } from "../ui/button"
 import { Input } from "../ui/input"
 import { Textarea } from "../ui/textarea"
-import { Progress } from "../ui/progress"
-// removed unused Select imports
 import { Search, Upload, Download, Target, Trash2 } from "lucide-react"
 
   interface MatchResult {
@@ -450,10 +448,10 @@ export function EntityMatchPage() {
     setMatchingResults(finalResults)
   }
 
-  const getConfidenceColor = (confidence: number) => {
-    if (confidence >= 90) return "text-green-600"
-    if (confidence >= 70) return "text-yellow-600"
-    return "text-red-600"
+  const getConfidenceBg = (confidence: number) => {
+    if (confidence >= 90) return "bg-emerald-500/10 text-emerald-600 border-emerald-500/20"
+    if (confidence >= 70) return "bg-amber-500/10 text-amber-600 border-amber-500/20"
+    return "bg-rose-500/10 text-rose-600 border-rose-500/20"
   }
 
 
@@ -482,114 +480,169 @@ export function EntityMatchPage() {
   }
 
   return (
-    <div className="p-6 space-y-6">
-      <div>
-        <h1>FatCat Entity Matcher</h1>
-        <p className="text-muted-foreground">
-          Find matching LEI records for your entities using single search, bulk input, or CSV upload. FatCat makes entity matching precise and effortless.
-        </p>
+    <div className="p-6 lg:p-8 space-y-8">
+      {/* Hero Section */}
+      <div className="relative">
+        <div className="absolute -top-4 right-1/3 h-32 w-32 rounded-full bg-accent/5 blur-3xl" />
+        <div className="relative">
+          <div className="flex items-center gap-2 text-primary mb-2">
+            <Target className="h-4 w-4" />
+            <span className="text-xs font-medium uppercase tracking-widest">Entity Matching</span>
+          </div>
+          <h1 className="text-3xl lg:text-4xl font-bold tracking-tight gold-accent-line" style={{ fontFamily: 'var(--font-display)' }}>
+            FatCat Entity Matcher
+          </h1>
+          <p className="mt-3 text-muted-foreground max-w-2xl">
+            Find matching LEI records for your entities using single search, bulk input, or CSV upload. Precision matching powered by intelligent algorithms.
+          </p>
+        </div>
       </div>
 
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-        <TabsList>
-          <TabsTrigger value="single">Single Entity</TabsTrigger>
-          <TabsTrigger value="bulk">Bulk Input</TabsTrigger>
-          <TabsTrigger value="upload">CSV Upload</TabsTrigger>
-          <TabsTrigger value="results">Results</TabsTrigger>
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+        <TabsList className="bg-muted/30 p-1 rounded-xl">
+          <TabsTrigger value="single" className="rounded-lg data-[state=active]:bg-background data-[state=active]:shadow-sm px-4">
+            Single Entity
+          </TabsTrigger>
+          <TabsTrigger value="bulk" className="rounded-lg data-[state=active]:bg-background data-[state=active]:shadow-sm px-4">
+            Bulk Input
+          </TabsTrigger>
+          <TabsTrigger value="upload" className="rounded-lg data-[state=active]:bg-background data-[state=active]:shadow-sm px-4">
+            CSV Upload
+          </TabsTrigger>
+          <TabsTrigger value="results" className="rounded-lg data-[state=active]:bg-background data-[state=active]:shadow-sm px-4">
+            Results
+            {matchingResults.length > 0 && (
+              <Badge variant="secondary" className="ml-2 text-[10px]">{matchingResults.length}</Badge>
+            )}
+          </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="single" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Single Entity Search</CardTitle>
+        <TabsContent value="single" className="space-y-6">
+          <Card className="card-hover-lift overflow-hidden">
+            <div className="absolute inset-0 bg-gradient-to-br from-primary/[0.02] via-transparent to-accent/[0.02]" />
+            <CardHeader className="relative pb-2">
+              <CardTitle className="flex items-center gap-2" style={{ fontFamily: 'var(--font-display)' }}>
+                Single Entity Search
+              </CardTitle>
               <CardDescription>Search for LEI matches for a single entity name</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex gap-2">
+            <CardContent className="relative space-y-4">
+              <div className="flex gap-3">
                 <div className="relative flex-1">
-                  <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
                     placeholder="Enter entity name (e.g., Apple Inc., Microsoft Corporation)"
-                    className="pl-8"
+                    className="pl-10 h-11 rounded-lg border-border/50 bg-background focus:ring-2 focus:ring-primary/20 focus:border-primary"
                     value={singleEntity}
                     onChange={(e) => setSingleEntity(e.target.value)}
                     onKeyDown={(e) => { if (e.key === 'Enter') handleSingleSearch() }}
                   />
                 </div>
-                <Button onClick={handleSingleSearch} disabled={isProcessing}>
-                  <Target className="h-4 w-4 mr-2" />
+                <Button
+                  onClick={handleSingleSearch}
+                  disabled={isProcessing}
+                  className="h-11 px-6 rounded-lg bg-primary hover:bg-primary/90 shadow-sm"
+                >
+                  {isProcessing ? (
+                    <div className="h-4 w-4 mr-2 animate-spin rounded-full border-2 border-primary-foreground/30 border-t-primary-foreground" />
+                  ) : (
+                    <Target className="h-4 w-4 mr-2" />
+                  )}
                   Find Matches
                 </Button>
               </div>
 
-              <div className="text-sm text-muted-foreground">
-                <p>Tips for better matching:</p>
-                <ul className="list-disc list-inside mt-1 space-y-1">
-                  <li>Use the full legal entity name when possible</li>
-                  <li>Include common suffixes like "Inc.", "Corp.", "Ltd."</li>
-                  <li>Try variations if no exact match is found</li>
+              <div className="p-4 rounded-xl bg-muted/30 border border-border/30">
+                <p className="text-sm font-medium mb-2">Tips for better matching:</p>
+                <ul className="text-sm text-muted-foreground space-y-1.5">
+                  <li className="flex items-start gap-2">
+                    <span className="text-primary mt-1">+</span>
+                    Use the full legal entity name when possible
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-primary mt-1">+</span>
+                    Include common suffixes like "Inc.", "Corp.", "Ltd."
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-primary mt-1">+</span>
+                    Try variations if no exact match is found
+                  </li>
                 </ul>
               </div>
             </CardContent>
           </Card>
         </TabsContent>
 
-        <TabsContent value="bulk" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Bulk Entity Search</CardTitle>
+        <TabsContent value="bulk" className="space-y-6">
+          <Card className="card-hover-lift">
+            <CardHeader className="pb-2">
+              <CardTitle style={{ fontFamily: 'var(--font-display)' }}>Bulk Entity Search</CardTitle>
               <CardDescription>Search for multiple entities at once using comma-separated or line-separated input</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
                 <label className="text-sm font-medium">Entity Names</label>
-                <Textarea 
+                <Textarea
                   placeholder="Enter entity names separated by commas or new lines:&#10;Apple Inc., Microsoft Corporation&#10;Amazon.com, Inc.&#10;Tesla, Inc."
-                  className="min-h-32"
+                  className="min-h-36 rounded-lg border-border/50 bg-background focus:ring-2 focus:ring-primary/20 focus:border-primary resize-none"
                   value={bulkEntities}
                   onChange={(e) => setBulkEntities(e.target.value)}
                 />
               </div>
-              
-              <div className="flex items-center justify-between">
-                <div className="text-sm text-muted-foreground">
-                  {bulkEntities.split(/[,\n]/).filter(e => e.trim()).length} entities to process
+
+              <div className="flex items-center justify-between p-3 rounded-lg bg-muted/30 border border-border/30">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                    <span className="text-sm font-semibold">{bulkEntities.split(/[,\n]/).filter(e => e.trim()).length}</span>
+                  </div>
+                  <span className="text-sm text-muted-foreground">entities to process</span>
                 </div>
                 <div className="flex gap-2">
-                  <Button variant="outline" onClick={() => setBulkEntities("")}>
+                  <Button variant="outline" onClick={() => setBulkEntities("")} className="rounded-lg border-border/50">
                     <Trash2 className="h-4 w-4 mr-2" />
                     Clear
                   </Button>
-                  <Button onClick={handleBulkSearch} disabled={isProcessing}>
-                    <Target className="h-4 w-4 mr-2" />
+                  <Button onClick={handleBulkSearch} disabled={isProcessing} className="rounded-lg bg-primary hover:bg-primary/90">
+                    {isProcessing ? (
+                      <div className="h-4 w-4 mr-2 animate-spin rounded-full border-2 border-primary-foreground/30 border-t-primary-foreground" />
+                    ) : (
+                      <Target className="h-4 w-4 mr-2" />
+                    )}
                     Find Matches
                   </Button>
                 </div>
               </div>
 
               {isProcessing && (
-                <div className="space-y-2">
+                <div className="space-y-3 p-4 rounded-xl bg-primary/5 border border-primary/10">
                   <div className="flex items-center justify-between text-sm">
-                    <span>Processing entities...</span>
-                    <span>{Math.round(processingProgress)}%</span>
+                    <span className="font-medium">Processing entities...</span>
+                    <span className="text-primary font-semibold">{Math.round(processingProgress)}%</span>
                   </div>
-                  <Progress value={processingProgress} />
+                  <div className="h-2 rounded-full bg-muted/50 overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-primary to-accent transition-all duration-300"
+                      style={{ width: `${processingProgress}%` }}
+                    />
+                  </div>
                 </div>
               )}
             </CardContent>
           </Card>
         </TabsContent>
 
-        <TabsContent value="upload" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>CSV Upload</CardTitle>
+        <TabsContent value="upload" className="space-y-6">
+          <Card className="card-hover-lift">
+            <CardHeader className="pb-2">
+              <CardTitle style={{ fontFamily: 'var(--font-display)' }}>CSV Upload</CardTitle>
               <CardDescription>Upload a CSV file containing entity names for batch processing</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="border-2 border-dashed border-muted-foreground/25 rounded-lg p-6 text-center">
-                <Upload className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
-                <p className="text-sm text-muted-foreground mb-2">
+              <div className="group border-2 border-dashed border-border/50 hover:border-primary/40 rounded-xl p-8 text-center transition-colors cursor-pointer bg-gradient-to-br from-muted/20 to-transparent">
+                <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-primary/20 to-accent/10 mx-auto mb-4 flex items-center justify-center group-hover:scale-110 transition-transform">
+                  <Upload className="h-6 w-6 text-primary" />
+                </div>
+                <p className="text-sm text-muted-foreground mb-3">
                   Drop a CSV file here, or click to browse
                 </p>
                 <input
@@ -601,52 +654,68 @@ export function EntityMatchPage() {
                   disabled={isProcessing}
                 />
                 <label htmlFor="csv-upload">
-                  <Button variant="outline" size="sm" asChild>
+                  <Button variant="outline" size="sm" className="rounded-lg border-border/50 cursor-pointer" asChild>
                     <span>Browse Files</span>
                   </Button>
                 </label>
               </div>
 
-              <div className="text-sm text-muted-foreground space-y-2">
-                <p><strong>Supported formats:</strong></p>
-                <ul className="list-disc list-inside space-y-1">
-                  <li>CSV files with entity names in the first column</li>
-                  <li>Text files with one entity per line</li>
-                  <li>Comma-separated values in a single line</li>
+              <div className="p-4 rounded-xl bg-muted/30 border border-border/30 space-y-3">
+                <p className="text-sm font-medium">Supported formats:</p>
+                <ul className="text-sm text-muted-foreground space-y-1.5">
+                  <li className="flex items-start gap-2">
+                    <span className="text-primary mt-0.5">+</span>
+                    CSV files with entity names in the first column
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-primary mt-0.5">+</span>
+                    Text files with one entity per line
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-primary mt-0.5">+</span>
+                    Comma-separated values in a single line
+                  </li>
                 </ul>
-                <p><strong>File requirements:</strong> Maximum 1,000 entities per upload</p>
+                <p className="text-xs text-muted-foreground/70 pt-2 border-t border-border/30">
+                  <strong>File requirements:</strong> Maximum 1,000 entities per upload
+                </p>
               </div>
 
               {isProcessing && (
-                <div className="space-y-2">
+                <div className="space-y-3 p-4 rounded-xl bg-primary/5 border border-primary/10">
                   <div className="flex items-center justify-between text-sm">
-                    <span>Processing uploaded entities...</span>
-                    <span>{Math.round(processingProgress)}%</span>
+                    <span className="font-medium">Processing uploaded entities...</span>
+                    <span className="text-primary font-semibold">{Math.round(processingProgress)}%</span>
                   </div>
-                  <Progress value={processingProgress} />
+                  <div className="h-2 rounded-full bg-muted/50 overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-primary to-accent transition-all duration-300"
+                      style={{ width: `${processingProgress}%` }}
+                    />
+                  </div>
                 </div>
               )}
             </CardContent>
           </Card>
         </TabsContent>
 
-        <TabsContent value="results" className="space-y-4">
+        <TabsContent value="results" className="space-y-6">
           {matchingResults.length > 0 ? (
             <>
               <div className="flex items-center justify-between">
                 <div>
-                  <h2>Matching Results</h2>
-                  <p className="text-muted-foreground">
+                  <h2 className="text-xl font-bold" style={{ fontFamily: 'var(--font-display)' }}>Matching Results</h2>
+                  <p className="text-muted-foreground text-sm mt-1">
                     Found matches for {matchingResults.length} input entities
                   </p>
                 </div>
-                <Button variant="outline" onClick={exportResults}>
+                <Button variant="outline" onClick={exportResults} className="rounded-lg border-border/50">
                   <Download className="h-4 w-4 mr-2" />
                   Export Results
                 </Button>
               </div>
 
-              <Card>
+              <Card className="card-hover-lift">
                 <CardContent className="p-0">
                   <div className="overflow-x-auto">
                     <Table>
@@ -685,29 +754,30 @@ export function EntityMatchPage() {
                                 }
                                 
                                 return (
-                                  <TableCell key={matchIndex} className={isSelected ? "bg-blue-50" : ""}>
+                                  <TableCell key={matchIndex} className={isSelected ? "bg-primary/5" : ""}>
                                     <button
                                       onClick={() => handleMatchSelection(resultIndex, matchIndex)}
-                                      className="text-left w-full p-2 hover:bg-gray-50 rounded transition-colors"
+                                      className={`text-left w-full p-3 rounded-lg transition-all ${
+                                        isSelected
+                                          ? 'ring-1 ring-primary/30 bg-primary/5'
+                                          : 'hover:bg-muted/50'
+                                      }`}
                                     >
-                                      <div className="space-y-1">
-                                        <div className="font-medium">{match.legalName}</div>
-                                        <div className="text-xs text-muted-foreground">
-                                          LEI: {match.lei}
+                                      <div className="space-y-1.5">
+                                        <div className="font-medium text-sm">{match.legalName}</div>
+                                        <div className="text-[10px] text-muted-foreground font-mono">
+                                          {match.lei}
                                         </div>
-                                        <div className="flex items-center gap-2">
-                                          <Badge variant="outline" className="text-xs">
-                                            {match.matchType}
+                                        <div className="flex items-center gap-2 pt-1">
+                                          <Badge variant="outline" className={`text-[10px] ${getConfidenceBg(match.confidence)}`}>
+                                            {match.matchType} {match.confidence}%
                                           </Badge>
-                                          <span className={`text-xs ${getConfidenceColor(match.confidence)}`}>
-                                            {match.confidence}%
-                                          </span>
+                                          {isSelected && (
+                                            <Badge className="text-[10px] bg-primary text-primary-foreground">
+                                              Selected
+                                            </Badge>
+                                          )}
                                         </div>
-                                        {isSelected && (
-                                          <Badge variant="default" className="text-xs">
-                                            Selected
-                                          </Badge>
-                                        )}
                                       </div>
                                     </button>
                                   </TableCell>
@@ -717,61 +787,61 @@ export function EntityMatchPage() {
                               {/* Selected Match column */}
                               <TableCell>
                                 {selectedMatch ? (
-                                  <div className="space-y-1 bg-green-50 p-2 rounded">
-                                    <div className="font-medium">{selectedMatch.legalName}</div>
-                                    <div className="text-xs text-muted-foreground">
-                                      LEI: {selectedMatch.lei}
+                                  <div className="space-y-1.5 bg-emerald-500/5 border border-emerald-500/10 p-3 rounded-lg">
+                                    <div className="font-medium text-sm">{selectedMatch.legalName}</div>
+                                    <div className="text-[10px] text-muted-foreground font-mono">
+                                      {selectedMatch.lei}
                                     </div>
-                                    <div className="flex items-center gap-2">
-                                      <Badge variant="outline" className="text-xs">
-                                        {selectedMatch.matchType}
-                                      </Badge>
-                                      <span className={`text-xs ${getConfidenceColor(selectedMatch.confidence)}`}>
-                                        {selectedMatch.confidence}%
-                                      </span>
-                                    </div>
+                                    <Badge variant="outline" className={`text-[10px] ${getConfidenceBg(selectedMatch.confidence)}`}>
+                                      {selectedMatch.matchType} {selectedMatch.confidence}%
+                                    </Badge>
                                   </div>
                                 ) : (
-                                  <div className="text-center text-muted-foreground text-sm">
+                                  <div className="text-center text-muted-foreground text-xs py-4">
                                     No match selected
                                   </div>
                                 )}
                               </TableCell>
-                              
+
                               {/* Ultimate Parent column */}
                               <TableCell>
                                 {result.ultimateParent ? (
-                                  <div className="space-y-1">
-                                    <div className="font-medium">{result.ultimateParent.legalName}</div>
-                                    <div className="text-xs text-muted-foreground">
-                                      LEI: {result.ultimateParent.lei}
+                                  <div className="space-y-1.5 p-3 rounded-lg bg-muted/30">
+                                    <div className="font-medium text-sm">{result.ultimateParent.legalName}</div>
+                                    <div className="text-[10px] text-muted-foreground font-mono">
+                                      {result.ultimateParent.lei}
                                     </div>
                                     {result.ultimateParent.lei === selectedMatch?.lei && (
-                                      <Badge variant="secondary" className="text-xs">
-                                        Self (No parent)
+                                      <Badge variant="secondary" className="text-[10px]">
+                                        Self (Root)
                                       </Badge>
                                     )}
                                   </div>
                                 ) : (
-                                  <div className="text-center text-muted-foreground text-sm">
-                                    {selectedMatch ? 'Loading...' : 'No match selected'}
+                                  <div className="text-center text-muted-foreground text-xs py-4">
+                                    {selectedMatch ? (
+                                      <div className="flex items-center justify-center gap-2">
+                                        <div className="h-3 w-3 animate-spin rounded-full border-2 border-primary/30 border-t-primary" />
+                                        Loading...
+                                      </div>
+                                    ) : 'No match selected'}
                                   </div>
                                 )}
                               </TableCell>
-                              
+
                               {/* Related To column */}
                               <TableCell>
                                 {result.relatedEntities && result.relatedEntities.length > 0 ? (
-                                  <div className="space-y-1">
-                                    <div className="text-sm font-medium text-blue-600">
+                                  <div className="space-y-1.5 p-3 rounded-lg bg-primary/5 border border-primary/10">
+                                    <div className="text-sm font-medium text-primary">
                                       {result.relatedEntities.join(", ")}
                                     </div>
-                                    <div className="text-xs text-muted-foreground">
+                                    <div className="text-[10px] text-muted-foreground">
                                       Shares same ultimate parent
                                     </div>
                                   </div>
                                 ) : (
-                                  <div className="text-center text-muted-foreground text-sm">
+                                  <div className="text-center text-muted-foreground text-xs py-4">
                                     No related entities
                                   </div>
                                 )}
@@ -786,15 +856,20 @@ export function EntityMatchPage() {
               </Card>
             </>
           ) : (
-            <Card>
-              <CardContent className="text-center py-8">
-                <Target className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-                <h3>No Results Yet</h3>
-                <p className="text-muted-foreground mb-4">
-                  Use the search tabs above to find entity matches
+            <Card className="card-hover-lift">
+              <CardContent className="text-center py-12">
+                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary/10 to-accent/5 mx-auto mb-5 flex items-center justify-center">
+                  <Target className="h-8 w-8 text-primary" />
+                </div>
+                <h3 className="text-lg font-semibold mb-2" style={{ fontFamily: 'var(--font-display)' }}>No Results Yet</h3>
+                <p className="text-muted-foreground mb-6 max-w-sm mx-auto">
+                  Use the search tabs above to find entity matches and discover corporate relationships.
                 </p>
-                <div className="flex justify-center gap-2">
-                  <Button variant="outline" onClick={() => setActiveTab('bulk')}>
+                <div className="flex justify-center gap-3">
+                  <Button variant="outline" onClick={() => setActiveTab('single')} className="rounded-lg border-border/50">
+                    Single Search
+                  </Button>
+                  <Button onClick={() => setActiveTab('bulk')} className="rounded-lg bg-primary hover:bg-primary/90">
                     Start Bulk Search
                   </Button>
                 </div>

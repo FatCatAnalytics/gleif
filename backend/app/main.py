@@ -1,22 +1,32 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 import re
 import time
 import os
-from collections import deque
+from collections import OrderedDict, deque
+from contextlib import asynccontextmanager
 from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional, Set, Callable, Awaitable
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logger = logging.getLogger("gleif")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 LEI_PATTERN = re.compile(r"^[A-Z0-9]{20}$", re.I)
 
+# ---------------------------------------------------------------------------
+# Pydantic models
+# ---------------------------------------------------------------------------
 
 class Row(BaseModel):
     lei: str
@@ -76,96 +86,142 @@ class HierarchyShape(BaseModel):
     ultimateChildrenCount: int
     visitedCount: int
 
+# ---------------------------------------------------------------------------
+# TTL + LRU Cache  (thread-safe for single-process async use)
+# ---------------------------------------------------------------------------
 
 class TTLCache:
+    """In-memory cache with per-key TTL and LRU eviction."""
+
     def __init__(self, ttl_seconds: int = 300, max_size: int = 2048) -> None:
         self._ttl = ttl_seconds
         self._max = max_size
-        self._store: Dict[str, tuple[float, Any]] = {}
+        self._store: OrderedDict[str, tuple[float, Any]] = OrderedDict()
 
     def get(self, key: str) -> Any:
         item = self._store.get(key)
-        if not item:
+        if item is None:
             return None
         expires_at, value = item
         if time.time() > expires_at:
             self._store.pop(key, None)
             return None
+        # Move to end (most-recently used)
+        self._store.move_to_end(key)
         return value
 
     def set(self, key: str, value: Any) -> None:
-        if len(self._store) >= self._max:
-            # best-effort simple eviction: remove one arbitrary item
-            self._store.pop(next(iter(self._store)), None)
+        # Update existing key or insert new
+        if key in self._store:
+            self._store.move_to_end(key)
+        elif len(self._store) >= self._max:
+            # Evict least-recently used (front of OrderedDict)
+            self._store.popitem(last=False)
         self._store[key] = (time.time() + self._ttl, value)
 
 
-CACHE_VERSION = "2"
-lei_cache = TTLCache(ttl_seconds=600)
+CACHE_VERSION = "3"
+lei_cache = TTLCache(ttl_seconds=600, max_size=4096)
+
+# ---------------------------------------------------------------------------
+# Shared httpx client (connection-pooled) via lifespan
+# ---------------------------------------------------------------------------
+
+_http_client: Optional[httpx.AsyncClient] = None
 
 
-app = FastAPI(title="GLEIF Proxy API", version="0.1.0")
+def _get_client() -> httpx.AsyncClient:
+    """Return the shared httpx.AsyncClient (created at startup)."""
+    assert _http_client is not None, "httpx client not initialised – app not started?"
+    return _http_client
 
-# CORS origins: read from env var ALLOWED_ORIGINS (comma-separated), fallback to localhost
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    global _http_client
+    limits = httpx.Limits(max_connections=40, max_keepalive_connections=20)
+    _http_client = httpx.AsyncClient(
+        limits=limits,
+        timeout=httpx.Timeout(30.0, connect=10.0),
+        http2=False,
+    )
+    logger.info("Shared httpx.AsyncClient created (pool max=40)")
+    yield
+    await _http_client.aclose()
+    _http_client = None
+    logger.info("Shared httpx.AsyncClient closed")
+
+
+app = FastAPI(title="GLEIF Proxy API", version="0.2.0", lifespan=_lifespan)
+
+# ---------------------------------------------------------------------------
+# CORS
+# ---------------------------------------------------------------------------
+
 _default_allowed_origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
 ]
 _env_origins = os.getenv("ALLOWED_ORIGINS")
 
-# Parse allowed origins from environment
 if _env_origins:
-    origins = [o.strip() for o in _env_origins.split(",") if o.strip()]
-    _allowed_origins = origins
+    _allowed_origins = [o.strip() for o in _env_origins.split(",") if o.strip()]
 else:
     _allowed_origins = _default_allowed_origins
 
-# Note: Wildcard support is handled via allow_origin_regex below
-    
-# Log the configured origins for debugging
-print(f"CORS: Configured origins: {_allowed_origins}")
-print(f"CORS: Environment variable ALLOWED_ORIGINS: {_env_origins}")
-print(f"CORS: ALLOW_ALL_VERCEL: {os.getenv('ALLOW_ALL_VERCEL')}")
-
-# Configure CORS with regex support for Vercel domains
 allow_origin_regex = None
 if os.getenv("ALLOW_ALL_VERCEL", "").lower() == "true":
     allow_origin_regex = r"https://.*\.vercel\.app"
-    
+
+logger.info("CORS origins: %s | regex: %s", _allowed_origins, allow_origin_regex)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
     allow_origin_regex=allow_origin_regex,
-    allow_credentials=False,  # Changed to False for simpler CORS
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# ---------------------------------------------------------------------------
+# Health / debug endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
 
-@app.get("/debug/cors")
-async def debug_cors():
-    """Debug endpoint to check CORS configuration"""
-    return {
-        "configured_origins": _allowed_origins,
-        "allow_origin_regex": allow_origin_regex,
-        "env_ALLOWED_ORIGINS": os.getenv("ALLOWED_ORIGINS"),
-        "env_ALLOW_ALL_VERCEL": os.getenv("ALLOW_ALL_VERCEL"),
-        "default_origins": _default_allowed_origins,
-    }
+if os.getenv("DEBUG", "").lower() in ("1", "true"):
+    @app.get("/debug/cors")
+    async def debug_cors():
+        """Debug endpoint – only available when DEBUG=1."""
+        return {
+            "configured_origins": _allowed_origins,
+            "allow_origin_regex": allow_origin_regex,
+            "env_ALLOWED_ORIGINS": os.getenv("ALLOWED_ORIGINS"),
+            "env_ALLOW_ALL_VERCEL": os.getenv("ALLOW_ALL_VERCEL"),
+        }
+
+
+# ---------------------------------------------------------------------------
+# Mapping helpers
+# ---------------------------------------------------------------------------
+
+_STATUS_MAP = {
+    "ACTIVE": "Active",
+    "LAPSED": "Lapsed",
+    "RETIRED": "Retired",
+    "MERGED": "Merged",
+}
 
 
 def _status_to_display(status: Optional[str]) -> Optional[str]:
     if not status:
         return None
     s = status.upper()
-    mapping = {
-        "ACTIVE": "Active",
-        "LAPSED": "Lapsed",
-        "RETIRED": "Retired",
-        "MERGED": "Merged",
-    }
-    return mapping.get(s, s[:1] + s[1:].lower())
+    return _STATUS_MAP.get(s, s[:1] + s[1:].lower())
 
 
 def _map_row(data: Dict[str, Any]) -> Row:
@@ -220,42 +276,43 @@ class AsyncRateLimiter:
         while True:
             async with self._lock:
                 now = time.monotonic()
-                # Evict old timestamps
                 while self._calls and (now - self._calls[0]) > self._period:
                     self._calls.popleft()
                 if len(self._calls) < self._max_calls:
                     self._calls.append(now)
                     return
                 wait_for = self._period - (now - self._calls[0])
-            # sleep outside the lock, add small jitter
             await asyncio.sleep(max(0.01, wait_for) + random.uniform(0, 0.05))
 
 
-# Keep a little headroom under the documented 60 req/min limit
-GLEIF_RATE_LIMITER = AsyncRateLimiter(max_calls=58, period_seconds=60.0)
+# Keep headroom under the GLEIF 60 req/min limit
+GLEIF_RATE_LIMITER = AsyncRateLimiter(max_calls=55, period_seconds=60.0)
+
+# Concurrency semaphore – avoid overwhelming the upstream with parallel requests
+_GLEIF_SEMAPHORE = asyncio.Semaphore(12)
 
 
 async def _gleif_get(
-    client: httpx.AsyncClient,
     url: str,
     *,
     params: Optional[Dict[str, Any]] = None,
     timeout: float | httpx.Timeout | None = 30.0,
     max_retries: int = 5,
 ) -> httpx.Response:
+    """Rate-limited GET against the GLEIF API with retry + backoff."""
+    client = _get_client()
     base_backoff = 0.5
     for attempt in range(max_retries + 1):
         await GLEIF_RATE_LIMITER.acquire()
-        try:
-            r = await client.get(url, params=params, timeout=timeout)
-        except httpx.HTTPError:
-            # network/timeout -> backoff and retry
-            if attempt >= max_retries:
-                raise
-            await asyncio.sleep(min(8.0, base_backoff * (2 ** attempt)) + random.uniform(0, 0.1))
-            continue
+        async with _GLEIF_SEMAPHORE:
+            try:
+                r = await client.get(url, params=params, timeout=timeout)
+            except httpx.HTTPError:
+                if attempt >= max_retries:
+                    raise
+                await asyncio.sleep(min(8.0, base_backoff * (2 ** attempt)) + random.uniform(0, 0.1))
+                continue
 
-        # 404: return directly; callers handle
         if r.status_code == 404:
             return r
 
@@ -266,10 +323,8 @@ async def _gleif_get(
             sleep_seconds: float
             if retry_after is not None:
                 try:
-                    # seconds form
                     sleep_seconds = float(retry_after)
                 except ValueError:
-                    # HTTP-date form
                     try:
                         when = parsedate_to_datetime(retry_after)
                         sleep_seconds = max(0.5, (when - parsedate_to_datetime(r.headers.get("date", ""))).total_seconds())
@@ -280,11 +335,9 @@ async def _gleif_get(
             await asyncio.sleep(sleep_seconds + random.uniform(0, 0.1))
             continue
 
-        # other 4xx/5xx errors should raise
         r.raise_for_status()
         return r
 
-    # Should not reach here
     raise HTTPException(status_code=502, detail="GLEIF upstream not available")
 
 async def _maybe_cancel(cancel_check: Optional[Callable[[], Awaitable[bool]]]) -> None:
@@ -299,28 +352,17 @@ def _make_cancel_check(request: Request) -> Callable[[], Awaitable[bool]]:
     return _check
 
 
-async def _fetch_lei(client: httpx.AsyncClient, lei: str) -> Optional[Row]:
-    cache_key = f"{CACHE_VERSION}:lei:{lei}"
-    cached = lei_cache.get(cache_key)
-    if cached is not None:
-        return cached
-    r = await _gleif_get(client, f"https://api.gleif.org/api/v1/lei-records/{lei}", timeout=20)
-    if r.status_code == 404:
-        return None
-    data = r.json().get("data")
-    if not data:
-        return None
-    row = _map_row(data)
-    lei_cache.set(cache_key, row)
-    return row
+# ---------------------------------------------------------------------------
+# Data-fetching helpers  (all use shared _get_client())
+# ---------------------------------------------------------------------------
 
-
-async def _fetch_lei_raw(client: httpx.AsyncClient, lei: str) -> Optional[dict]:
+async def _fetch_lei_raw(lei: str) -> Optional[dict]:
+    """Fetch raw GLEIF record (cached). Single source of truth for per-LEI data."""
     cache_key = f"{CACHE_VERSION}:lei_raw:{lei}"
     cached = lei_cache.get(cache_key)
     if cached is not None:
         return cached
-    r = await _gleif_get(client, f"https://api.gleif.org/api/v1/lei-records/{lei}", timeout=20)
+    r = await _gleif_get(f"https://api.gleif.org/api/v1/lei-records/{lei}", timeout=20)
     if r.status_code == 404:
         return None
     data = r.json().get("data")
@@ -328,6 +370,20 @@ async def _fetch_lei_raw(client: httpx.AsyncClient, lei: str) -> Optional[dict]:
         return None
     lei_cache.set(cache_key, data)
     return data
+
+
+async def _fetch_lei(lei: str) -> Optional[Row]:
+    """Fetch mapped Row for an LEI. Re-uses the raw cache to avoid duplicate requests."""
+    cache_key = f"{CACHE_VERSION}:lei_row:{lei}"
+    cached = lei_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    data = await _fetch_lei_raw(lei)
+    if not data:
+        return None
+    row = _map_row(data)
+    lei_cache.set(cache_key, row)
+    return row
 
 
 def _map_details(data: dict) -> LeiDetails:
@@ -353,43 +409,51 @@ def _map_details(data: dict) -> LeiDetails:
     )
 
 
-async def _fetch_ultimate_parent(client: httpx.AsyncClient, lei: str) -> Optional[str]:
-    r = await _gleif_get(client, f"https://api.gleif.org/api/v1/lei-records/{lei}/ultimate-parent", timeout=20)
+async def _fetch_ultimate_parent(lei: str) -> Optional[str]:
+    cache_key = f"{CACHE_VERSION}:ult_parent:{lei}"
+    cached = lei_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    r = await _gleif_get(f"https://api.gleif.org/api/v1/lei-records/{lei}/ultimate-parent", timeout=20)
     if r.status_code == 404:
         return None
     data = r.json().get("data")
     if not data:
         return None
-    return data.get("id") or (data.get("attributes") or {}).get("lei")
+    parent_lei = data.get("id") or (data.get("attributes") or {}).get("lei")
+    if parent_lei:
+        lei_cache.set(cache_key, parent_lei)
+    return parent_lei
 
 
 async def _fetch_direct_children(
-    client: httpx.AsyncClient,
     lei: str,
     cancel_check: Optional[Callable[[], Awaitable[bool]]] = None,
 ) -> List[str]:
+    cache_key = f"{CACHE_VERSION}:children_ids:{lei}"
+    cached = lei_cache.get(cache_key)
+    if cached is not None:
+        return list(cached)
     url = f"https://api.gleif.org/api/v1/lei-records/{lei}/direct-children?page[size]=200"
     leis: List[str] = []
-    for _ in range(10):  # safety cap
+    for _ in range(10):
         await _maybe_cancel(cancel_check)
-        r = await _gleif_get(client, url, timeout=30)
+        r = await _gleif_get(url, timeout=30)
         if r.status_code == 404:
             break
         payload = r.json()
-        items = payload.get("data") or []
-        for item in items:
+        for item in payload.get("data") or []:
             cand = (item.get("attributes") or {}).get("lei") or item.get("id")
             if cand:
                 leis.append(str(cand))
-        links = payload.get("links") or {}
-        next_url = links.get("next")
+        next_url = (payload.get("links") or {}).get("next")
         if not next_url or next_url == url:
             break
         url = next_url
+    lei_cache.set(cache_key, leis)
     return leis
 
 async def _fetch_direct_children_rows(
-    client: httpx.AsyncClient,
     lei: str,
     cancel_check: Optional[Callable[[], Awaitable[bool]]] = None,
 ) -> List[Row]:
@@ -399,55 +463,48 @@ async def _fetch_direct_children_rows(
         return list(cached)
     url = f"https://api.gleif.org/api/v1/lei-records/{lei}/direct-children?page[size]=200"
     rows: List[Row] = []
-    for _ in range(10):  # safety cap
+    for _ in range(10):
         await _maybe_cancel(cancel_check)
-        r = await _gleif_get(client, url, timeout=30)
+        r = await _gleif_get(url, timeout=30)
         if r.status_code == 404:
             break
         payload = r.json()
-        items = payload.get("data") or []
-        for item in items:
-            # Be strict about expected keys; skip malformed items without broad except
+        for item in payload.get("data") or []:
             attrs = item.get("attributes") if isinstance(item, dict) else None
             if not isinstance(attrs, dict):
                 continue
             try:
-                row = _map_row(item)
+                rows.append(_map_row(item))
             except (KeyError, TypeError, ValueError):
                 continue
-            rows.append(row)
-        links = payload.get("links") or {}
-        next_url = links.get("next")
+        next_url = (payload.get("links") or {}).get("next")
         if not next_url or next_url == url:
             break
         url = next_url
     lei_cache.set(cache_key, rows)
     return rows
 async def _compute_hierarchy_shape(
-    client: httpx.AsyncClient,
     root_lei: str,
     max_nodes: int = 20000,
     cancel_check: Optional[Callable[[], Awaitable[bool]]] = None,
 ) -> HierarchyShape:
-    cache_key = f"{CACHE_VERSION}:shape:v2:{root_lei}:{max_nodes}"
+    cache_key = f"{CACHE_VERSION}:shape:v3:{root_lei}:{max_nodes}"
     cached = lei_cache.get(cache_key)
     if cached is not None:
         return cached
 
-    # Get direct children of root once for accuracy
-    root_children = await _fetch_direct_children(client, root_lei, cancel_check)
+    root_children = await _fetch_direct_children(root_lei, cancel_check)
 
-    # BFS over relationship graph using only LEI IDs to estimate max depth and visited count
-    visited: set[str] = set([root_lei])
+    visited: set[str] = {root_lei}
     frontier: List[str] = list(root_children)
     depth = 0
-    semaphore = asyncio.Semaphore(4)
+    bfs_semaphore = asyncio.Semaphore(10)
 
     async def fetch_ids(lei: str) -> List[str]:
-        async with semaphore:
+        async with bfs_semaphore:
             try:
                 await _maybe_cancel(cancel_check)
-                return await _fetch_direct_children(client, lei, cancel_check)
+                return await _fetch_direct_children(lei, cancel_check)
             except (httpx.HTTPError, ValueError):
                 return []
 
@@ -455,20 +512,25 @@ async def _compute_hierarchy_shape(
         await _maybe_cancel(cancel_check)
         depth += 1
         next_level: List[str] = []
-        results = await asyncio.gather(*[fetch_ids(x) for x in frontier], return_exceptions=False)
-        for ids in results:
-            for cid in ids:
-                if cid not in visited:
-                    visited.add(cid)
-                    next_level.append(cid)
-                    if len(visited) >= max_nodes:
-                        break
+        # Process frontier in chunks to avoid thundering-herd
+        CHUNK = 40
+        for i in range(0, len(frontier), CHUNK):
+            chunk = frontier[i : i + CHUNK]
+            results = await asyncio.gather(*[fetch_ids(x) for x in chunk])
+            for ids in results:
+                for cid in ids:
+                    if cid not in visited:
+                        visited.add(cid)
+                        next_level.append(cid)
+                        if len(visited) >= max_nodes:
+                            break
+                if len(visited) >= max_nodes:
+                    break
             if len(visited) >= max_nodes:
                 break
         frontier = next_level
 
-    # Use authoritative ultimate-children count
-    ultimate_cnt = await _fetch_ultimate_children_count(client, root_lei, cancel_check)
+    ultimate_cnt = await _fetch_ultimate_children_count(root_lei, cancel_check)
     shape = HierarchyShape(
         maxDepth=depth,
         directChildrenCount=len(root_children),
@@ -482,7 +544,6 @@ async def _compute_hierarchy_shape(
 
 
 async def _build_hierarchy(
-    client: httpx.AsyncClient,
     root_lei: str,
     cancel_check: Optional[Callable[[], Awaitable[bool]]] = None,
 ) -> Optional[HierarchyNode]:
@@ -493,10 +554,10 @@ async def _build_hierarchy(
         if lei in visited:
             return None
         visited.add(lei)
-        row = await _fetch_lei(client, lei)
+        row = await _fetch_lei(lei)
         if not row:
             return None
-        child_leis = await _fetch_direct_children(client, lei, cancel_check)
+        child_leis = await _fetch_direct_children(lei, cancel_check)
         children_nodes_raw = await asyncio.gather(*[build(c) for c in child_leis])
         children_nodes = [c for c in children_nodes_raw if c]
         return HierarchyNode(entity=row, children=children_nodes)
@@ -504,186 +565,291 @@ async def _build_hierarchy(
     return await build(root_lei)
 
 
+class FlatNode(BaseModel):
+    parentLei: Optional[str] = None
+    entity: Row
+
+
+async def _build_hierarchy_flat(
+    root_lei: str,
+    max_nodes: int = 5000,
+    cancel_check: Optional[Callable[[], Awaitable[bool]]] = None,
+) -> List[FlatNode]:
+    """BFS the hierarchy and return a flat list of (parentLei, Row).
+    
+    Much faster than the tree endpoint because:
+    - Uses _fetch_direct_children_rows (one paginated call returns rows for
+      all children) instead of individual per-LEI fetches.
+    - Processes each BFS level in parallel batches via a semaphore.
+    """
+    cache_key = f"{CACHE_VERSION}:flat:{root_lei}:{max_nodes}"
+    cached = lei_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    root_row = await _fetch_lei(root_lei)
+    if not root_row:
+        return []
+
+    result: List[FlatNode] = [FlatNode(parentLei=None, entity=root_row)]
+    visited: set[str] = {root_lei}
+    # frontier = list of (parent_lei, child_lei) to process
+    frontier: List[str] = [root_lei]
+    sem = asyncio.Semaphore(10)
+
+    async def fetch_children_of(parent_lei: str) -> List[FlatNode]:
+        async with sem:
+            await _maybe_cancel(cancel_check)
+            try:
+                rows = await _fetch_direct_children_rows(parent_lei, cancel_check)
+            except (httpx.HTTPError, ValueError):
+                return []
+            return [FlatNode(parentLei=parent_lei, entity=r) for r in rows]
+
+    while frontier and len(result) < max_nodes:
+        await _maybe_cancel(cancel_check)
+        # Fetch all children for the entire current level in parallel
+        CHUNK = 30
+        next_frontier: List[str] = []
+        for i in range(0, len(frontier), CHUNK):
+            chunk = frontier[i : i + CHUNK]
+            batch = await asyncio.gather(*[fetch_children_of(lei) for lei in chunk])
+            for nodes in batch:
+                for fn in nodes:
+                    if fn.entity.lei not in visited:
+                        visited.add(fn.entity.lei)
+                        result.append(fn)
+                        next_frontier.append(fn.entity.lei)
+                        if len(result) >= max_nodes:
+                            break
+                if len(result) >= max_nodes:
+                    break
+            if len(result) >= max_nodes:
+                break
+        frontier = next_frontier
+
+    lei_cache.set(cache_key, result)
+    return result
+
+
 async def _fetch_ultimate_children_count(
-    client: httpx.AsyncClient,
     lei: str,
     cancel_check: Optional[Callable[[], Awaitable[bool]]] = None,
 ) -> int:
+    """Get total ultimate-children count.
+    
+    Try the GLEIF meta.paging.totalRecords first (single request).
+    Fall back to paginating if the field is missing.
+    """
     cache_key = f"{CACHE_VERSION}:ultimate_children_count:{lei}"
     cached = lei_cache.get(cache_key)
     if cached is not None:
         return int(cached)
-    url = f"https://api.gleif.org/api/v1/lei-records/{lei}/ultimate-children?page[size]=200"
-    total = 0
-    for _ in range(50):  # safety cap
+    url = f"https://api.gleif.org/api/v1/lei-records/{lei}/ultimate-children"
+    await _maybe_cancel(cancel_check)
+    r = await _gleif_get(url, params={"page[size]": "1"}, timeout=30)
+    if r.status_code == 404:
+        lei_cache.set(cache_key, 0)
+        return 0
+    payload = r.json()
+    # Fast path: use totalRecords from API metadata
+    total_records = (payload.get("meta") or {}).get("paging", {}).get("totalRecords")
+    if total_records is not None:
+        total = int(total_records)
+        lei_cache.set(cache_key, total)
+        return total
+    # Slow fallback: paginate
+    total = len(payload.get("data") or [])
+    next_url = (payload.get("links") or {}).get("next")
+    page = 0
+    while next_url and next_url != url and page < 50:
+        page += 1
         await _maybe_cancel(cancel_check)
-        r = await _gleif_get(client, url, timeout=30)
+        url = next_url
+        r = await _gleif_get(url, timeout=30)
         if r.status_code == 404:
             break
         payload = r.json()
-        items = payload.get("data") or []
-        total += len(items)
-        links = payload.get("links") or {}
-        next_url = links.get("next")
-        if not next_url or next_url == url:
-            break
-        url = next_url
+        total += len(payload.get("data") or [])
+        next_url = (payload.get("links") or {}).get("next")
     lei_cache.set(cache_key, total)
     return total
 
 async def _fetch_direct_children_count(
-    client: httpx.AsyncClient,
     lei: str,
     cancel_check: Optional[Callable[[], Awaitable[bool]]] = None,
 ) -> int:
+    """Get total direct-children count (prefers meta.paging.totalRecords)."""
     cache_key = f"{CACHE_VERSION}:direct_children_count:{lei}"
     cached = lei_cache.get(cache_key)
     if cached is not None:
         return int(cached)
-    url = f"https://api.gleif.org/api/v1/lei-records/{lei}/direct-children?page[size]=200"
-    total = 0
-    for _ in range(50):  # safety cap
+    url = f"https://api.gleif.org/api/v1/lei-records/{lei}/direct-children"
+    await _maybe_cancel(cancel_check)
+    r = await _gleif_get(url, params={"page[size]": "1"}, timeout=30)
+    if r.status_code == 404:
+        lei_cache.set(cache_key, 0)
+        return 0
+    payload = r.json()
+    total_records = (payload.get("meta") or {}).get("paging", {}).get("totalRecords")
+    if total_records is not None:
+        total = int(total_records)
+        lei_cache.set(cache_key, total)
+        return total
+    # Slow fallback
+    total = len(payload.get("data") or [])
+    next_url = (payload.get("links") or {}).get("next")
+    page = 0
+    while next_url and next_url != url and page < 50:
+        page += 1
         await _maybe_cancel(cancel_check)
-        r = await _gleif_get(client, url, timeout=30)
+        url = next_url
+        r = await _gleif_get(url, timeout=30)
         if r.status_code == 404:
             break
         payload = r.json()
-        items = payload.get("data") or []
-        total += len(items)
-        links = payload.get("links") or {}
-        next_url = links.get("next")
-        if not next_url or next_url == url:
-            break
-        url = next_url
+        total += len(payload.get("data") or [])
+        next_url = (payload.get("links") or {}).get("next")
     lei_cache.set(cache_key, total)
     return total
 
 @app.get("/api/lei/{lei}", response_model=Optional[Row])
-async def get_lei(lei: str):
+async def get_lei(lei: str, response: Response):
     if not LEI_PATTERN.match(lei):
         raise HTTPException(status_code=400, detail="Invalid LEI format")
-    async with httpx.AsyncClient() as client:
-        row = await _fetch_lei(client, lei)
-        return row
+    response.headers["Cache-Control"] = "public, max-age=300"
+    row = await _fetch_lei(lei)
+    return row
 
 
 @app.get("/api/search", response_model=List[Row])
-async def search(q: str):
+async def search(q: str, response: Response):
     q = q.strip()
     if not q:
         return []
-    async with httpx.AsyncClient() as client:
-        if LEI_PATTERN.match(q):
-            row = await _fetch_lei(client, q)
-            return [row] if row else []
-        # name path
-        r = await _gleif_get(
-            client,
-            "https://api.gleif.org/api/v1/autocompletions",
-            params={"field": "fulltext", "q": q},
-            timeout=20,
-        )
-        data = r.json().get("data") or []
-        leis: List[str] = []
-        for item in data:
-            rel = (item.get("relationships") or {}).get("lei-records") or {}
-            cand = (rel.get("data") or {}).get("id")
-            if not cand:
-                txt = (
-                    (item.get("attributes") or {}).get("lei")
-                    or (item.get("attributes") or {}).get("value")
-                    or (item.get("attributes") or {}).get("label")
-                    or ""
-                )
-                m = re.search(r"[A-Z0-9]{20}", str(txt).upper())
-                cand = m.group(0) if m else None
-            if cand and cand not in leis:
-                leis.append(cand)
+    response.headers["Cache-Control"] = "public, max-age=120"
+    if LEI_PATTERN.match(q):
+        row = await _fetch_lei(q)
+        return [row] if row else []
+    # name / autocomplete path
+    r = await _gleif_get(
+        "https://api.gleif.org/api/v1/autocompletions",
+        params={"field": "fulltext", "q": q},
+        timeout=20,
+    )
+    data = r.json().get("data") or []
+    leis: List[str] = []
+    for item in data:
+        rel = (item.get("relationships") or {}).get("lei-records") or {}
+        cand = (rel.get("data") or {}).get("id")
+        if not cand:
+            txt = (
+                (item.get("attributes") or {}).get("lei")
+                or (item.get("attributes") or {}).get("value")
+                or (item.get("attributes") or {}).get("label")
+                or ""
+            )
+            m = re.search(r"[A-Z0-9]{20}", str(txt).upper())
+            cand = m.group(0) if m else None
+        if cand and cand not in leis:
+            leis.append(cand)
 
-        # limit fan-out
-        leis = leis[:25]
-        rows = await asyncio.gather(*[_fetch_lei(client, l) for l in leis])
-        return [r for r in rows if r]
+    leis = leis[:25]
+    rows = await asyncio.gather(*[_fetch_lei(l) for l in leis])
+    return [r for r in rows if r]
 
 
 @app.get("/api/lei/{lei}/details", response_model=Optional[LeiDetails])
-async def lei_details(lei: str):
+async def lei_details(lei: str, response: Response):
     if not LEI_PATTERN.match(lei):
         raise HTTPException(status_code=400, detail="Invalid LEI format")
-    async with httpx.AsyncClient() as client:
-        data = await _fetch_lei_raw(client, lei)
-        if not data:
-            return None
-        return _map_details(data)
+    response.headers["Cache-Control"] = "public, max-age=300"
+    data = await _fetch_lei_raw(lei)
+    if not data:
+        return None
+    return _map_details(data)
 
 
 @app.get("/api/lei/{lei}/hierarchy", response_model=Optional[HierarchyNode])
-async def lei_hierarchy(lei: str, request: Request):
+async def lei_hierarchy(lei: str, request: Request, response: Response):
     if not LEI_PATTERN.match(lei):
         raise HTTPException(status_code=400, detail="Invalid LEI format")
-    async with httpx.AsyncClient() as client:
-        # find ultimate parent (if 404, the entity itself is ultimate parent)
-        ultimate = await _fetch_ultimate_parent(client, lei)
-        root_lei = ultimate or lei
-        cancel_check = _make_cancel_check(request)
-        tree = await _build_hierarchy(client, root_lei, cancel_check)
-        return tree
+    response.headers["Cache-Control"] = "public, max-age=600"
+    ultimate = await _fetch_ultimate_parent(lei)
+    root_lei = ultimate or lei
+    cancel_check = _make_cancel_check(request)
+    tree = await _build_hierarchy(root_lei, cancel_check)
+    return tree
+
+@app.get("/api/lei/{lei}/hierarchy/flat", response_model=List[FlatNode])
+async def lei_hierarchy_flat(lei: str, request: Request, response: Response):
+    """Return entire hierarchy as a flat list – much faster than the tree endpoint.
+    
+    Each item has { parentLei, entity } so the frontend can reconstruct the tree.
+    """
+    if not LEI_PATTERN.match(lei):
+        raise HTTPException(status_code=400, detail="Invalid LEI format")
+    response.headers["Cache-Control"] = "public, max-age=600"
+    ultimate = await _fetch_ultimate_parent(lei)
+    root_lei = ultimate or lei
+    cancel_check = _make_cancel_check(request)
+    nodes = await _build_hierarchy_flat(root_lei, cancel_check=cancel_check)
+    return nodes
 
 @app.get("/api/lei/{lei}/ultimate-parent/row", response_model=Optional[Row])
-async def lei_ultimate_parent_row(lei: str):
+async def lei_ultimate_parent_row(lei: str, response: Response):
     if not LEI_PATTERN.match(lei):
         raise HTTPException(status_code=400, detail="Invalid LEI format")
-    async with httpx.AsyncClient() as client:
-        ultimate = await _fetch_ultimate_parent(client, lei)
-        root_lei = ultimate or lei
-        row = await _fetch_lei(client, root_lei)
-        return row
+    response.headers["Cache-Control"] = "public, max-age=300"
+    ultimate = await _fetch_ultimate_parent(lei)
+    root_lei = ultimate or lei
+    row = await _fetch_lei(root_lei)
+    return row
 
 @app.get("/api/lei/{lei}/children", response_model=List[Row])
-async def lei_direct_children(lei: str, request: Request):
+async def lei_direct_children(lei: str, request: Request, response: Response):
     if not LEI_PATTERN.match(lei):
         raise HTTPException(status_code=400, detail="Invalid LEI format")
-    async with httpx.AsyncClient() as client:
-        # Fast-path: use attributes from direct-children pages to avoid per-child record calls
-        cancel_check = _make_cancel_check(request)
-        rows = await _fetch_direct_children_rows(client, lei, cancel_check)
-        return rows
+    response.headers["Cache-Control"] = "public, max-age=300"
+    cancel_check = _make_cancel_check(request)
+    rows = await _fetch_direct_children_rows(lei, cancel_check)
+    return rows
 
 @app.get("/api/lei/{lei}/direct-children/leis", response_model=List[str])
-async def lei_direct_children_leis(lei: str, request: Request):
+async def lei_direct_children_leis(lei: str, request: Request, response: Response):
     if not LEI_PATTERN.match(lei):
         raise HTTPException(status_code=400, detail="Invalid LEI format")
-    async with httpx.AsyncClient() as client:
-        cancel_check = _make_cancel_check(request)
-        child_leis = await _fetch_direct_children(client, lei, cancel_check)
-        return child_leis
+    response.headers["Cache-Control"] = "public, max-age=300"
+    cancel_check = _make_cancel_check(request)
+    child_leis = await _fetch_direct_children(lei, cancel_check)
+    return child_leis
 
 @app.get("/api/lei/{lei}/hierarchy/shape", response_model=HierarchyShape)
-async def lei_hierarchy_shape(lei: str, request: Request):
+async def lei_hierarchy_shape(lei: str, request: Request, response: Response):
     if not LEI_PATTERN.match(lei):
         raise HTTPException(status_code=400, detail="Invalid LEI format")
-    async with httpx.AsyncClient() as client:
-        ultimate = await _fetch_ultimate_parent(client, lei)
-        root_lei = ultimate or lei
-        cancel_check = _make_cancel_check(request)
-        shape = await _compute_hierarchy_shape(client, root_lei, cancel_check=cancel_check)
-        return shape
+    response.headers["Cache-Control"] = "public, max-age=600"
+    ultimate = await _fetch_ultimate_parent(lei)
+    root_lei = ultimate or lei
+    cancel_check = _make_cancel_check(request)
+    shape = await _compute_hierarchy_shape(root_lei, cancel_check=cancel_check)
+    return shape
 
 @app.get("/api/lei/{lei}/ultimate-children/count", response_model=int)
-async def lei_ultimate_children_count(lei: str, request: Request):
+async def lei_ultimate_children_count(lei: str, request: Request, response: Response):
     if not LEI_PATTERN.match(lei):
         raise HTTPException(status_code=400, detail="Invalid LEI format")
-    async with httpx.AsyncClient() as client:
-        cancel_check = _make_cancel_check(request)
-        count = await _fetch_ultimate_children_count(client, lei, cancel_check)
-        return count
+    response.headers["Cache-Control"] = "public, max-age=300"
+    cancel_check = _make_cancel_check(request)
+    count = await _fetch_ultimate_children_count(lei, cancel_check)
+    return count
 
 @app.get("/api/lei/{lei}/direct-children/count", response_model=int)
-async def lei_direct_children_count(lei: str, request: Request):
+async def lei_direct_children_count(lei: str, request: Request, response: Response):
     if not LEI_PATTERN.match(lei):
         raise HTTPException(status_code=400, detail="Invalid LEI format")
-    async with httpx.AsyncClient() as client:
-        cancel_check = _make_cancel_check(request)
-        count = await _fetch_direct_children_count(client, lei, cancel_check)
-        return count
+    response.headers["Cache-Control"] = "public, max-age=300"
+    cancel_check = _make_cancel_check(request)
+    count = await _fetch_direct_children_count(lei, cancel_check)
+    return count
 
